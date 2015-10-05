@@ -172,9 +172,9 @@ namespace Microsoft.Research.Naiad
 
         public long TicksSinceStartup { get { return this.computation.TicksSinceStartup; } }
 
-        public TemporaryPlacement Placement(Placement scopedPlacement)
+        public TemporaryPlacement WithPlacement(Placement scopedPlacement)
         {
-            return this.computation.Placement(scopedPlacement);
+            return this.computation.WithPlacement(scopedPlacement);
         }
 
         public StreamContext Context { get { return this.computation.Context; } }
@@ -421,7 +421,7 @@ namespace Microsoft.Research.Naiad
         /// </summary>
         /// <param name="scopedPlacement">the placement to use in the scope</param>
         /// <returns>object that will revert to the previous placement on disposal</returns>
-        TemporaryPlacement Placement(Placement scopedPlacement);
+        TemporaryPlacement WithPlacement(Placement scopedPlacement);
 
         /// <summary>
         /// A base context for the computation
@@ -829,7 +829,7 @@ namespace Microsoft.Research.Naiad
             }
         }
 
-        public TemporaryPlacement Placement(Placement scopedPlacement)
+        public TemporaryPlacement WithPlacement(Placement scopedPlacement)
         {
             Placement previous = this.defaultPlacement;
             this.defaultPlacement = scopedPlacement;

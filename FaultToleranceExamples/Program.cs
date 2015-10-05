@@ -48,7 +48,7 @@ namespace FaultToleranceExamples
             where T : Time<T>
         {
             Stream<S, T> output = null;
-            using (var ov = computation.Placement(placement))
+            using (var ov = computation.WithPlacement(placement))
             {
                 output = function(input);
             }
@@ -63,7 +63,7 @@ namespace FaultToleranceExamples
             where S : IEquatable<S>
         {
             Collection<S, T> output = null;
-            using (var ov = computation.Placement(placement))
+            using (var ov = computation.WithPlacement(placement))
             {
                 output = function(input);
             }
@@ -74,9 +74,11 @@ namespace FaultToleranceExamples
             StaggeredJoin<TInput1, TInput2, TKey, TInner, TOuter>(
             this Stream<TInput1, TInner> stream1,
             Stream<TInput2, TInner> stream2,
+            Stream<Pair<long, long>, TInner> stream2Window,
             Func<TInput1, TKey> keySelector1, Func<TInput2, TKey> keySelector2,
-            Func<TInput1, TInput2, Program.FastPipeline.Record> resultSelector,
-            Func<TInner, TOuter> timeSelector, Func<TOuter, TInner> notifySelector)
+            Func<TInput1, TInput2, Pair<long, long>, Program.FastPipeline.Record> resultSelector,
+            Func<TInner, TOuter> timeSelector, Action<TOuter> filledAction,
+            string name)
             where TInput2 : Program.IRecord
             where TInner : Time<TInner>
             where TOuter : Time<TOuter>
@@ -84,14 +86,14 @@ namespace FaultToleranceExamples
             HashSet<Program.FastPipeline.StaggeredJoinVertex<TInput1, TInput2, TKey, TInner, TOuter>> vertices =
                 new HashSet<Program.FastPipeline.StaggeredJoinVertex<TInput1, TInput2, TKey, TInner, TOuter>>();
 
-            return stream1.NewBinaryStage(stream2.Prepend(), (i, s) =>
+            return stream1.NewTernaryStage(stream2.Prepend(), stream2Window, (i, s) =>
                 {
                     var vertex = new Program.FastPipeline.StaggeredJoinVertex<TInput1, TInput2, TKey, TInner, TOuter>(
-                        i, s, keySelector1, keySelector2, resultSelector, timeSelector, notifySelector);
+                        i, s, keySelector1, keySelector2, resultSelector, timeSelector, filledAction);
                     vertices.Add(vertex);
                     return vertex;
                 },
-                    x => keySelector1(x).GetHashCode(), x => keySelector2(x).GetHashCode(), null, "StaggeredJoin")
+                    x => keySelector1(x).GetHashCode(), x => keySelector2(x).GetHashCode(), x => 0, null, name)
                     .SetCheckpointType(CheckpointType.StatelessLogEphemeral).SetCheckpointPolicy(s => new CheckpointWithoutPersistence())
                     .PairWith(vertices);
         }
@@ -105,9 +107,14 @@ namespace FaultToleranceExamples
                     .SetCheckpointType(CheckpointType.StatelessLogEphemeral).SetCheckpointPolicy(s => new CheckpointWithoutPersistence());
         }
 
-        public static void HelperStage<R>(this Stream<Pair<int,R>, Epoch> stream, Action<R> action)
+        public static void PartitionedActionStage<R>(this Stream<Pair<int,R>, Epoch> stream, Action<R> action)
         {
-            Program.HelperVertex<R>.HelperStage(stream, action);
+            Program.PartitionedActionVertex<R>.PartitionedActionStage(stream, action);
+        }
+
+        public static void PartitionedActionStage(this Stream<int, Epoch> stream, Action action)
+        {
+            Program.PartitionedActionVertex.PartitionedActionStage(stream, action);
         }
     }
 
@@ -156,13 +163,34 @@ namespace FaultToleranceExamples
             public Stream<Record, IterationIn<Epoch>> Reduce(Stream<HTRecord, IterationIn<Epoch>> input)
             {
                 var smaller = input.Select(r => new Record(r)).SetCheckpointPolicy(i => new CheckpointEagerly());
-                var count = smaller.Select(r => r.key).Count().SetCheckpointPolicy(i => new CheckpointEagerly());
+                var count = smaller.Select(r => r.key).SetCheckpointPolicy(i => new CheckpointEagerly())
+                    .Count(i => new CheckpointEagerly());
+
                 var consumable = smaller
-                    .Select(r => r.key.PairWith(r)).SetCheckpointPolicy(i => new CheckpointEagerly())
-                    .Join(count, r => r.First, c => c.First, (r, c) => { r.Second.count = c.Second; return r.Second; }).SetCheckpointPolicy(i => new CheckpointEagerly());
+                    .Join(count, r => r.key, c => c.First, (r, c) => { r.count = c.Second; return r; }).SetCheckpointPolicy(i => new CheckpointEagerly());
                 var reduced = consumable.SetCheckpointType(CheckpointType.StatelessLogAll).SetCheckpointPolicy(i => new CheckpointEagerly());
+
                 this.reduceStage = reduced.ForStage.StageId;
                 return reduced;
+            }
+
+            public Stream<Pair<long,long>, Epoch> TimeWindow(Stream<Record, Epoch> input, int workerCount)
+            {
+                var parallelMin = input
+                    .Where(r => r.entryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
+                    .Min(r => r.key.GetHashCode() % workerCount, r => r.entryTicks, i => new CheckpointEagerly());
+                var min = parallelMin.Min(r => true, r => r.Second, i => new CheckpointEagerly());
+
+                var parallelMax = input
+                    .Where(r => r.entryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
+                    .Max(r => r.key.GetHashCode() % workerCount, r => r.entryTicks, i => new CheckpointEagerly());
+                var max = parallelMax.Max(r => true, r => r.Second, i => new CheckpointEagerly());
+
+                var consumable = min
+                    .Join(max, mi => mi.First, ma => ma.First, (mi, ma) => mi.Second.PairWith(ma.Second)).SetCheckpointPolicy(i => new CheckpointEagerly());
+                var window = consumable.SetCheckpointType(CheckpointType.StatelessLogAll).SetCheckpointPolicy(i => new CheckpointEagerly());
+
+                return window;
             }
 
             public Stream<Record, Epoch> Compute(Stream<Record, Epoch> input)
@@ -176,7 +204,7 @@ namespace FaultToleranceExamples
                 get { return new int[] { reduceStage }; }
             }
 
-            public Collection<Record, Epoch> Make(Computation computation)
+            public Pair<Collection<Record, Epoch>, Stream<Pair<long, long>, Epoch>> Make(Computation computation)
             {
                 this.source = new SubBatchDataSource<HTRecord, Epoch>();
 
@@ -184,9 +212,10 @@ namespace FaultToleranceExamples
                     new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
                         Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
 
-                Collection<Record, Epoch> output;
+                Collection<Record, Epoch> weighted;
+                Stream<Pair<long, long>, Epoch> window;
 
-                using (var p = computation.Placement(placement))
+                using (var p = computation.WithPlacement(placement))
                 {
                     var reduced = computation.BatchedEntry<Record, Epoch>(c =>
                             {
@@ -198,7 +227,7 @@ namespace FaultToleranceExamples
 
                     var computed = this.Compute(reduced);
 
-                    output = computed
+                    weighted = computed
                         .Select(r =>
                         {
                             if (r.EntryTicks < 0)
@@ -211,8 +240,11 @@ namespace FaultToleranceExamples
                                 return new Weighted<Record>(r, 1);
                             }
                         }).AsCollection(false);
+
+                    window = this.TimeWindow(reduced, placement.Count);
                 }
-                return output;
+
+                return weighted.PairWith(window);
             }
 
             public SlowPipeline(int baseProc, int range)
@@ -295,6 +327,11 @@ namespace FaultToleranceExamples
 
                 public override void OnNotify(T time)
                 {
+                    var output = this.Output.GetBufferForTime(time);
+                    R r = default(R);
+                    r.EntryTicks = -2;
+                    output.Send(r);
+
                     this.seenAny.Remove(time);
                 }
 
@@ -303,18 +340,20 @@ namespace FaultToleranceExamples
                 }
             }
 
-            public class StaggeredJoinVertex<TInput1, TInput2, TKey, TInner, TOuter> : BinaryVertex<TInput1, TInput2, Record, TInner>
+            public class StaggeredJoinVertex<TInput1, TInput2, TKey, TInner, TOuter> : TernaryVertex<TInput1, TInput2, Pair<long, long>, Record, TInner>
                 where TInput2 : IRecord
                 where TInner : Time<TInner>
                 where TOuter : Time<TOuter>
             {
                 private readonly Dictionary<TOuter, Dictionary<TKey, List<TInput2>>> values = new Dictionary<TOuter,Dictionary<TKey,List<TInput2>>>();
+                private readonly Dictionary<TOuter, Pair<long, long>> windows = new Dictionary<TOuter, Pair<long, long>>();
+                private readonly HashSet<TOuter> gotValues = new HashSet<TOuter>();
 
                 private readonly Func<TInput1, TKey> keySelector1;
                 private readonly Func<TInput2, TKey> keySelector2;
-                private readonly Func<TInput1, TInput2, Record> resultSelector;
+                private readonly Func<TInput1, TInput2, Pair<long, long>, Record> resultSelector;
                 private readonly Func<TInner, TOuter> timeSelector;
-                private readonly Func<TOuter, TInner> notifySelector;
+                private readonly Action<TOuter> filledAction;
 
                 protected override bool CanRollBackPreservingState(Pointstamp[] frontier)
                 {
@@ -328,37 +367,16 @@ namespace FaultToleranceExamples
 
                 public override void OnReceive1(Message<TInput1, TInner> message)
                 {
+                    Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
                     TOuter outer = timeSelector(message.time);
 
-                    bool present;
-
-                    lock (this)
-                    {
-                        present = this.values.ContainsKey(outer);
-                    }
-
-                    if (!present)
-                    {
-                        Console.WriteLine("Missing time " + outer + " for " + message.time);
-                        // we are running ahead a bit. just drop the record on the floor instead of implementing
-                        // it properly.
-                        var brokenOutput = this.Output.GetBufferForTime(message.time);
-
-                        for (int i = 0; i < message.length; i++)
-                        {
-                            Record r = resultSelector(message.payload[i], default(TInput2));
-                            // at least we'll make it clear the latency is not correct...
-                            r.startMs = -1;
-                            brokenOutput.Send(r);
-                        }
-                        return;
-                    }
-
                     Dictionary<TKey, List<TInput2>> currentValues;
+                    Pair<long, long> window;
 
                     lock (this)
                     {
                         currentValues = this.values[outer];
+                        window = this.windows[outer];
                     }
 
                     var output = this.Output.GetBufferForTime(message.time);
@@ -371,58 +389,96 @@ namespace FaultToleranceExamples
                         if (currentValues.TryGetValue(key, out currentEntry))
                         {
                             foreach (var match in currentEntry)
-                                output.Send(resultSelector(message.payload[i], match));
+                                output.Send(resultSelector(message.payload[i], match, window));
                         }
                     }
                 }
 
                 public override void OnReceive2(Message<TInput2, TInner> message)
                 {
-                    Console.WriteLine("Receiving " + message.time);
+                    Console.WriteLine(this.Stage.Name + " Receive2 " + message.time);
                     TOuter outerTime = timeSelector(message.time);
 
                     int baseRecord = 0;
-
-                    bool present;
-
-                    if (message.payload[0].EntryTicks < 0)
-                    {
-                        ++baseRecord;
-                        lock (this)
-                        {
-                            present = this.values.ContainsKey(outerTime);
-                            if (present)
-                            {
-                                Console.WriteLine("Discarding " + outerTime);
-                                this.values.Remove(outerTime);
-                            }
-                        }
-                    }
 
                     Dictionary<TKey, List<TInput2>> currentValues;
 
                     lock (this)
                     {
-                        if (!this.values.ContainsKey(outerTime))
+                        if (message.payload[0].EntryTicks == -1)
                         {
-                            this.values.Add(outerTime, new Dictionary<TKey, List<TInput2>>());
+                            ++baseRecord;
+                            if (this.values.ContainsKey(outerTime))
+                            {
+                                throw new ApplicationException("Duplicate times");
+                            }
+                            else
+                            {
+                                this.values.Add(outerTime, new Dictionary<TKey, List<TInput2>>());
+                            }
                         }
-                        
+
                         currentValues = this.values[outerTime];
                     }
 
                     for (int i = baseRecord; i < message.length; i++)
                     {
-                        var key = keySelector2(message.payload[i]);
-
-                        List<TInput2> currentEntry;
-                        if (!currentValues.TryGetValue(key, out currentEntry))
+                        if (message.payload[i].EntryTicks == -2)
                         {
-                            currentEntry = new List<TInput2>();
-                            currentValues[key] = currentEntry;
-                        }
+                            if (this.gotValues.Contains(outerTime))
+                            {
+                                this.gotValues.Remove(outerTime);
+                                this.filledAction(outerTime);
+                            }
+                            else
+                            {
+                                this.gotValues.Add(outerTime);
+                            }
 
-                        currentEntry.Add(message.payload[i]);
+                            Console.WriteLine(this.Stage.Name + " R2 " + outerTime + ": " + currentValues.Select(k => k.Value.Count).Sum());
+                            //foreach (var k in currentValues.Keys)
+                            //{
+                                //Console.WriteLine(this.Stage.Name + " R2 " + k + ": " + currentValues[k].Count);
+                                //foreach (var v in currentValues[k])
+                                //{
+                                //    Console.WriteLine("  " + this.Stage.Name + " R2 " + v + " ");
+                                //}
+                            //}
+                        }
+                        else
+                        {
+                            var key = keySelector2(message.payload[i]);
+
+                            List<TInput2> currentEntry;
+                            if (!currentValues.TryGetValue(key, out currentEntry))
+                            {
+                                currentEntry = new List<TInput2>();
+                                currentValues[key] = currentEntry;
+                            }
+
+                            currentEntry.Add(message.payload[i]);
+                        }
+                    }
+                }
+
+                public override void OnReceive3(Message<Pair<long, long>, TInner> message)
+                {
+                    Console.WriteLine(this.Stage.Name + " receive window " + message.time + message.payload[0]);
+                    TOuter outerTime = timeSelector(message.time);
+
+                    lock (this)
+                    {
+                        this.windows[outerTime] = message.payload[0];
+                    }
+
+                    if (this.gotValues.Contains(outerTime))
+                    {
+                        this.gotValues.Remove(outerTime);
+                        this.filledAction(outerTime);
+                    }
+                    else
+                    {
+                        this.gotValues.Add(outerTime);
                     }
                 }
 
@@ -441,11 +497,23 @@ namespace FaultToleranceExamples
                                 this.values.Remove(time);
                             }
                         }
+                        foreach (var time in this.windows.Keys.ToArray())
+                        {
+                            Pointstamp stamp = time.ToPointstamp(0);
+
+                            if (!stamp.Equals(outerStamp) && FTFrontier.IsLessThanOrEqualTo(stamp, outerStamp))
+                            {
+                                Console.WriteLine("Removing window " + time);
+                                this.windows.Remove(time);
+                            }
+                        }
                     }
                 }
 
-                public StaggeredJoinVertex(int index, Stage<TInner> stage, Func<TInput1, TKey> key1, Func<TInput2, TKey> key2, Func<TInput1, TInput2, Record> result,
-                    Func<TInner, TOuter> timeSelector, Func<TOuter, TInner> notifySelector)
+                public StaggeredJoinVertex(int index, Stage<TInner> stage,
+                    Func<TInput1, TKey> key1, Func<TInput2, TKey> key2,
+                    Func<TInput1, TInput2, Pair<long, long>, Record> result,
+                    Func<TInner, TOuter> timeSelector, Action<TOuter> filledAction)
                     : base(index, stage)
                 {
                     this.values = new Dictionary<TOuter, Dictionary<TKey, List<TInput2>>>();
@@ -453,7 +521,7 @@ namespace FaultToleranceExamples
                     this.keySelector2 = key2;
                     this.resultSelector = result;
                     this.timeSelector = timeSelector;
-                    this.notifySelector = notifySelector;
+                    this.filledAction = filledAction;
                 }
             }
 
@@ -499,6 +567,8 @@ namespace FaultToleranceExamples
             {
                 public int homeProcess;
                 public long startMs;
+                public Pair<long, long> slowWindow;
+                public Pair<long, long> ccWindow;
                 public int slowJoinKey;
                 public int ccJoinKey;
 
@@ -506,7 +576,10 @@ namespace FaultToleranceExamples
                 {
                     return homeProcess == other.homeProcess &&
                         startMs == other.startMs &&
-                        slowJoinKey == other.slowJoinKey;
+                        slowWindow.Equals(other.slowWindow) &&
+                        ccWindow.Equals(other.ccWindow) &&
+                        slowJoinKey == other.slowJoinKey &&
+                        ccJoinKey == other.ccJoinKey;
                 }
             }
 
@@ -514,9 +587,8 @@ namespace FaultToleranceExamples
             private bool gotSlowTime = false;
             private bool gotCCTime = false;
 
-            public void AcceptSlowTime(Pointstamp stamp)
+            public void AcceptSlowTime(Epoch slowTime)
             {
-                Epoch slowTime = new Epoch(stamp.Timestamp.a);
                 lock (this)
                 {
                     Console.WriteLine("Fast got slow time " + slowTime);
@@ -525,11 +597,11 @@ namespace FaultToleranceExamples
                 }
             }
 
-            public void AcceptCCTime(Pointstamp stamp)
+            public void AcceptCCTime(IterationIn<Epoch> ccTime)
             {
                 bool start = false;
 
-                IterationIn<Epoch> ccTime = new IterationIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b);
+                Console.WriteLine("Fast got CC time " + ccTime);
 
                 if (ccTime.iteration == int.MaxValue)
                 {
@@ -538,8 +610,7 @@ namespace FaultToleranceExamples
 
                 lock (this)
                 {
-                    //Console.WriteLine("Fast got CC time " + ccTime);
-                    if (this.gotSlowTime && ccTime.outerTime.epoch >= this.slowTime.epoch && ccTime.iteration > 1)
+                    if (this.gotSlowTime && ccTime.outerTime.epoch >= this.slowTime.epoch)
                     {
                         if (ccTime.outerTime.epoch > this.slowTime.epoch)
                         {
@@ -559,8 +630,8 @@ namespace FaultToleranceExamples
 
                 if (start)
                 {
-                    var thread = new System.Threading.Thread(new System.Threading.ThreadStart(() => FeedThread()));
-                    thread.Start();
+                    //var thread = new System.Threading.Thread(new System.Threading.ThreadStart(() => FeedThread()));
+                    //thread.Start();
                 }
             }
 
@@ -568,24 +639,28 @@ namespace FaultToleranceExamples
 
             private IEnumerable<Record> MakeBatch(int count)
             {
-                long ticks = program.computation.TicksSinceStartup / TimeSpan.TicksPerMillisecond;
+                long ms = program.computation.TicksSinceStartup / TimeSpan.TicksPerMillisecond;
                 for (int i=0; i<count; ++i)
                 {
                     yield return new Record
                     {
                         homeProcess = this.processId,
-                        startMs = ticks,
+                        startMs = ms,
+                        slowWindow = (-1L).PairWith(-1L),
+                        ccWindow = (-1L).PairWith(-1L),
                         slowJoinKey = random.Next(Program.numberOfKeys),
                         ccJoinKey = random.Next(Program.numberOfKeys),
                     };
                 }
 
-                for (int i=0; i<range; ++i)
+                for (int i=0; i<this.range; ++i)
                 {
                     yield return new Record
                     {
                         homeProcess = this.processId,
-                        startMs = ticks,
+                        startMs = ms,
+                        slowWindow = (-1L).PairWith(-1L),
+                        ccWindow = (-1L).PairWith(-1L),
                         slowJoinKey = i,
                         ccJoinKey = i,
                     };
@@ -596,10 +671,11 @@ namespace FaultToleranceExamples
             {
                 while (true)
                 {
-                    lock (this)
-                    {
-                        this.dataSource.OnNext(this.MakeBatch(Program.fastBatchSize));
-                    }
+                    Console.WriteLine("Sending fast batch");
+
+                    this.dataSource.OnNext(this.MakeBatch(Program.fastBatchSize));
+                    this.dataSource.CompleteInnerBatch();
+
                     Thread.Sleep(Program.fastSleepTime);
                 }
             }
@@ -647,6 +723,8 @@ namespace FaultToleranceExamples
             {
                 long doneMs = program.computation.TicksSinceStartup / TimeSpan.TicksPerMillisecond;
 
+                Console.WriteLine("Releasing records up to " + time);
+
                 List<Pair<IterationIn<IterationIn<Epoch>>, Record>> released = new List<Pair<IterationIn<IterationIn<Epoch>>, Record>>();
 
                 lock (this)
@@ -679,20 +757,14 @@ namespace FaultToleranceExamples
                     else
                     {
                         long slowBatchMs = -1;
-                        lock (program.slowBatchTimes)
+                        if (record.Second.slowWindow.First >= 0)
                         {
-                            if (!program.slowBatchTimes.TryGetValue(record.First.outerTime.outerTime, out slowBatchMs))
-                            {
-                                slowBatchMs = -1;
-                            }
+                            slowBatchMs = record.Second.slowWindow.Second / TimeSpan.TicksPerMillisecond;
                         }
                         long ccBatchMs = -1;
-                        lock (program.ccBatchTimes)
+                        if (record.Second.ccWindow.First >= 0)
                         {
-                            if (!program.ccBatchTimes.TryGetValue(record.First.outerTime, out ccBatchMs))
-                            {
-                                ccBatchMs = -1;
-                            }
+                            ccBatchMs = record.Second.slowWindow.Second / TimeSpan.TicksPerMillisecond;
                         }
 
                         long latency = doneMs - record.Second.startMs;
@@ -706,15 +778,7 @@ namespace FaultToleranceExamples
 
             private void ReactToStable(object o, StageStableEventArgs args)
             {
-                if (args.stageId == this.slowStage)
-                {
-                    this.AcceptSlowTime(args.frontier[0]);
-                }
-                else if (args.stageId == this.ccStage)
-                {
-                    this.AcceptCCTime(args.frontier[0]);
-                }
-                else if (args.stageId == resultStage)
+                if (args.stageId == resultStage)
                 {
                     this.ReleaseOutputs(args.frontier[0]);
                 }
@@ -722,7 +786,9 @@ namespace FaultToleranceExamples
 
             private SubBatchDataSource<Record, IterationIn<Epoch>> dataSource;
             public int slowStage;
+            public int slowWindowStage;
             private int ccStage;
+            private int ccWindowStage;
             private int resultStage;
 
             public IEnumerable<int> ToMonitor
@@ -737,6 +803,14 @@ namespace FaultToleranceExamples
                     .ForcePartitionBy(r => partitioning(r))
                     .ToStateless().SetCheckpointType(CheckpointType.StatefulLogEphemeral).SetCheckpointPolicy(i => new CheckpointEagerly()).Output
                     .SelectMany(r => Enumerable.Repeat(r.record, (int)Math.Max(0, r.weight))).SetCheckpointType(CheckpointType.StatelessLogEphemeral).SetCheckpointPolicy(i => new CheckpointWithoutPersistence());
+            }
+
+            private Stream<R, IterationIn<Epoch>> PrepareForFast<R>(Stream<R, IterationIn<Epoch>> input, Func<R, int> partitioning)
+                where R : IEquatable<R>
+            {
+                return input
+                    .ForcePartitionBy(r => partitioning(r))
+                    .Select(r => r).SetCheckpointType(CheckpointType.StatelessLogEphemeral).SetCheckpointPolicy(i => new CheckpointWithoutPersistence());
             }
 
             private Stream<Record, IterationIn<IterationIn<Epoch>>> Exit(Stream<Record, IterationIn<IterationIn<Epoch>>> results,
@@ -760,39 +834,49 @@ namespace FaultToleranceExamples
 
             public void Make(Computation computation,
                 Collection<SlowPipeline.Record, IterationIn<Epoch>> slowOutput,
-                Collection<CCPipeline.Record, IterationIn<Epoch>> ccOutput)
+                Stream<Pair<long, long>, IterationIn<Epoch>> slowTimeWindow,
+                Collection<CCPipeline.Record, IterationIn<Epoch>> ccOutput,
+                Stream<Pair<long, long>, IterationIn<Epoch>> ccTimeWindow)
             {
                 this.dataSource = new SubBatchDataSource<Record, IterationIn<Epoch>>();
 
                 Placement placement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range), Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
                 Placement senderPlacement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, 1), Enumerable.Range(0, 1));
 
-                using (var procs = computation.Placement(placement))
+                using (var procs = computation.WithPlacement(placement))
                 {
                     Stream<Record, IterationIn<IterationIn<Epoch>>> input;
-                    using (var sender = computation.Placement(senderPlacement))
+                    using (var sender = computation.WithPlacement(senderPlacement))
                     {
                         input = computation.NewInput(dataSource).SetCheckpointType(CheckpointType.CachingInput);
                     }
 
                     var slow = this.PrepareForFast(slowOutput, r => r.key);
                     this.slowStage = slow.ForStage.StageId;
+                    var slowWindow = this.PrepareForFast(slowTimeWindow, r => 0);
+                    this.slowWindowStage = slowWindow.ForStage.StageId;
                     var cc = this.PrepareForFast(ccOutput, r => r.key);
                     this.ccStage = cc.ForStage.StageId;
+                    var ccWindow = this.PrepareForFast(ccTimeWindow, r => 0);
+                    this.ccWindowStage = ccWindow.ForStage.StageId;
 
                     var output = computation.BatchedEntry<Record, IterationIn<Epoch>>(ic =>
                         {
                             var firstJoin = input.SetCheckpointPolicy(i => new CheckpointWithoutPersistence())
-                                .StaggeredJoin(ic.EnterLoop(slow).SetCheckpointPolicy(i => new CheckpointWithoutPersistence()),
-                                    i => i.slowJoinKey, s => s.key, (i, s) => i,
-                                    t => t.outerTime.outerTime, t => new IterationIn<IterationIn<Epoch>>(new IterationIn<Epoch>(t, int.MaxValue - 1), int.MaxValue - 1));
+                                .StaggeredJoin(
+                                    ic.EnterLoop(slow).SetCheckpointPolicy(i => new CheckpointWithoutPersistence()),
+                                    ic.EnterLoop(slowWindow).SetCheckpointPolicy(i => new CheckpointWithoutPersistence()),
+                                    i => i.slowJoinKey, s => s.key, (i, s, w) => { i.slowWindow = w; return i; },
+                                    t => t.outerTime.outerTime, this.AcceptSlowTime, "SlowJoin");
 
                             this.slowVertices = firstJoin.Second;
 
                             var secondJoin = firstJoin.First
-                                .StaggeredJoin(ic.EnterLoop(cc).SetCheckpointPolicy(s => new CheckpointWithoutPersistence()),
-                                    i => i.ccJoinKey, c => c.key, (i, c) => i,
-                                    t => t.outerTime, t => new IterationIn<IterationIn<Epoch>>(t, int.MaxValue - 1));
+                                .StaggeredJoin(
+                                    ic.EnterLoop(cc).SetCheckpointPolicy(s => new CheckpointWithoutPersistence()),
+                                    ic.EnterLoop(ccWindow).SetCheckpointPolicy(s => new CheckpointWithoutPersistence()),
+                                    i => i.ccJoinKey, c => c.key, (i, c, w) => { i.ccWindow = w; return i; },
+                                    t => t.outerTime, this.AcceptCCTime, "CCJoin");
 
                             this.ccVertices = secondJoin.Second;
 
@@ -860,6 +944,25 @@ namespace FaultToleranceExamples
                 return reduced;
             }
 
+            public Stream<Pair<long, long>, IterationIn<Epoch>> TimeWindow(Stream<Record, IterationIn<Epoch>> input, int workerCount)
+            {
+                var parallelMin = input
+                    .Where(r => r.entryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
+                    .Min(r => r.key.GetHashCode() % workerCount, r => r.entryTicks, i => new CheckpointEagerly());
+                var min = parallelMin.Min(r => true, r => r.Second, i => new CheckpointEagerly());
+
+                var parallelMax = input
+                    .Where(r => r.entryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
+                    .Max(r => r.key.GetHashCode() % workerCount, r => r.entryTicks, i => new CheckpointEagerly());
+                var max = parallelMax.Max(r => true, r => r.Second, i => new CheckpointEagerly());
+
+                var consumable = min
+                    .Join(max, mi => mi.First, ma => ma.First, (mi, ma) => mi.Second.PairWith(ma.Second)).SetCheckpointPolicy(i => new CheckpointEagerly());
+                var window = consumable.SetCheckpointType(CheckpointType.StatelessLogAll).SetCheckpointPolicy(i => new CheckpointEagerly());
+
+                return window;
+            }
+
             private Collection<Record, IterationIn<Epoch>> Compute(Collection<Record, IterationIn<Epoch>> input)
             {
                 return input;
@@ -871,7 +974,7 @@ namespace FaultToleranceExamples
             {
                 Stream<R, IterationIn<T>> input;
 
-                using (var placement = computation.Placement(inputPlacement))
+                using (var placement = computation.WithPlacement(inputPlacement))
                 {
                     input = computation.NewInput(source).SetCheckpointPolicy(s => new CheckpointEagerly());
                 }
@@ -895,11 +998,13 @@ namespace FaultToleranceExamples
 
                 var slowOutput = slow.Make(computation);
 
+                Stream<Pair<long, long>, IterationIn<Epoch>> ccWindow;
+
                 var forCC = computation.BatchedEntry<Record, Epoch>(c =>
                     {
                         Collection<Record, IterationIn<Epoch>> cc;
 
-                        using (var p = computation.Placement(ccPlacement))
+                        using (var p = computation.WithPlacement(ccPlacement))
                         {
                             var reduced = computation
                                 .BatchedEntry<Record, IterationIn<Epoch>>(ic =>
@@ -920,11 +1025,14 @@ namespace FaultToleranceExamples
                                         return new Weighted<Record>(r, 1);
                                     }
                                 }).AsCollection(false);
+
                             cc = this.Compute(asCollection);
+                            
+                            ccWindow = this.TimeWindow(reduced, ccPlacement.Count);
                         }
 
                         //buggy.Make(computation, c.EnterLoop(slowOutput.Output).AsCollection(false), cc);
-                        perfect.Make(computation, c.EnterLoop(slowOutput.Output).AsCollection(false), cc);
+                        perfect.Make(computation, c.EnterLoop(slowOutput.First.Output).AsCollection(false), c.EnterLoop(slowOutput.Second), cc, ccWindow);
 
                         return cc;
                     });
@@ -937,7 +1045,7 @@ namespace FaultToleranceExamples
             }
         }
 
-        public class HelperVertex<R> : SinkVertex<Pair<int, R>, Epoch>
+        public class PartitionedActionVertex<R> : SinkVertex<Pair<int, R>, Epoch>
         {
             private readonly Action<R> action;
 
@@ -949,15 +1057,40 @@ namespace FaultToleranceExamples
                 }
             }
 
-            private HelperVertex(int index, Stage<Epoch> stage, Action<R> action)
+            private PartitionedActionVertex(int index, Stage<Epoch> stage, Action<R> action)
                 : base(index, stage)
             {
                 this.action = action;
             }
 
-            public static void HelperStage(Stream<Pair<int, R>, Epoch> stream, Action<R> action)
+            public static void PartitionedActionStage(Stream<Pair<int, R>, Epoch> stream, Action<R> action)
             {
-                stream.NewSinkStage<Pair<int, R>, Epoch>((i, s) => new HelperVertex<R>(i, s, action), null, "Helper")
+                stream.NewSinkStage<Pair<int, R>, Epoch>((i, s) => new PartitionedActionVertex<R>(i, s, action), null, "PartitionedAction")
+                    .SetCheckpointType(CheckpointType.None);
+            }
+        }
+
+        public class PartitionedActionVertex : SinkVertex<int, Epoch>
+        {
+            private readonly Action action;
+
+            public override void OnReceive(Message<int, Epoch> message)
+            {
+                for (int i = 0; i < message.length; ++i)
+                {
+                    action();
+                }
+            }
+
+            private PartitionedActionVertex(int index, Stage<Epoch> stage, Action action)
+                : base(index, stage)
+            {
+                this.action = action;
+            }
+
+            public static void PartitionedActionStage(Stream<int, Epoch> stream, Action action)
+            {
+                stream.NewSinkStage<int, Epoch>((i, s) => new PartitionedActionVertex(i, s, action), null, "PartitionedAction")
                     .SetCheckpointType(CheckpointType.None);
             }
         }
@@ -1017,285 +1150,276 @@ namespace FaultToleranceExamples
             }
         }
 
-        static IEnumerable<HTRecord> MakeStartingBatch(Random random, int batchBase, int stride, int batchSize)
+        public class BatchMaker
         {
-            for (int i = 0; i < batchSize; ++i)
+            private readonly int processId;
+            private readonly int processes;
+
+            // We ensure that each key has at least one edge present that is never removed, and those are introduced
+            // using this method
+            private IEnumerable<HTRecord> MakeStartingBatch(Random random)
             {
-                yield return new HTRecord
+                for (int i = (this.processId % this.processes); i < Program.numberOfKeys; i += this.processes)
                 {
-                    key = batchBase + i*stride,
-                    otherKey = random.Next(numberOfKeys),
-                    entryTicks = 1
-                };
+                    yield return new HTRecord
+                    {
+                        key = i,
+                        otherKey = random.Next(numberOfKeys),
+                        entryTicks = 0
+                    };
+                }
             }
-        }
 
-        static IEnumerable<HTRecord> MakeBatch(Random random, int batchSize, int sign)
-        {
-            for (int i = 0; i < batchSize; ++i)
+            // keep track of the times of batches we put in, so we can remove the exact same data later
+            private readonly Queue<long> batchTimes = new Queue<long>();
+            private Random introduceRandom;
+            private Random removeRandom;
+
+            private IEnumerable<HTRecord> MakeBatch(Random random, int batchSize, long entryTicks)
             {
-                HTRecord record = new HTRecord
+                if (entryTicks >= 0)
                 {
-                    key = random.Next(numberOfKeys),
-                    otherKey = random.Next(numberOfKeys),
-                    entryTicks = sign
-                };
-                yield return record;
-            }
-        }
-
-        private int randomSeed;
-        private Random random;
-
-        void InitialBatch(
-            int processId,
-            Placement inputPlacement,
-            SubBatchDataSource<HTRecord, Epoch> slowSource,
-            SubBatchDataSource<HTRecord, IterationIn<Epoch>> ccSource)
-        {
-            if (inputPlacement.Select(p => p.ProcessId).Contains(processId))
-            {
-                this.random = new Random();
-
-                int processes = inputPlacement.Count();
-
-                // the processes are a contiguous range but don't start from zero. each process should put in
-                // different keys...
-                for (int i = (processId % processes); i < numberOfKeys; i += htBatchSize*processes)
+                    // the batch is being added, so save its time
+                    this.batchTimes.Enqueue(entryTicks);
+                }
+                else
                 {
-                    var batch = MakeStartingBatch(random, i, processes, htBatchSize);
-                    slowSource.OnNext(batch);
-                    slowSource.CompleteInnerBatch();
-                    ccSource.OnNext(batch);
-                    ccSource.CompleteInnerBatch();
+                    // the batch is being removed, so look up the time that it was put in
+                    entryTicks = -(this.batchTimes.Dequeue());
                 }
 
-                // now start records that we will want to revoke, so use a seed
-                this.randomSeed = random.Next();
-                this.random = new Random(this.randomSeed);
-
-                for (int i = 0; i < Program.htInitialBatches; ++i)
+                for (int i = 0; i < batchSize; ++i)
                 {
-                    var batch = MakeBatch(random, htBatchSize, 1).ToArray();
-                    slowSource.OnNext(batch);
-                    slowSource.CompleteInnerBatch();
-                    ccSource.OnNext(batch);
-                    ccSource.CompleteInnerBatch();
+                    yield return new HTRecord
+                    {
+                        key = random.Next(Program.numberOfKeys),
+                        otherKey = random.Next(Program.numberOfKeys),
+                        entryTicks = entryTicks
+                    };
+                }
+            }
+
+            private int batchesReturned = 0;
+
+            public IEnumerable<HTRecord> NextBatch(long entryTicks)
+            {
+                IEnumerable<HTRecord> batch;
+
+                if (batchesReturned == 0)
+                {
+                    Random thisProcessRandom = new Random();
+                    int randomSeed = thisProcessRandom.Next();
+
+                    // make matching random number generators for adding and removing records
+                    this.introduceRandom = new Random(randomSeed);
+                    this.removeRandom = new Random(randomSeed);
+
+                    // add all the records that are not going to get removed.
+                    batch = this.MakeStartingBatch(thisProcessRandom);
+                }
+                else
+                {
+                    batch = this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks);
+                    if (this.batchesReturned >= Program.htInitialBatches)
+                    {
+                        batch = batch.Concat(this.MakeBatch(this.removeRandom, Program.htBatchSize, -1));
+                    }
                 }
 
-                slowSource.CompleteOuterBatch();
-                ccSource.CompleteOuterBatch();
+                ++this.batchesReturned;
+                return batch.ToArray();
+            }
+
+            public BatchMaker(int processes, int processId)
+            {
+                this.processes = processes;
+                this.processId = processId;
+            }
+        };
+
+        private int currentCompletedSlowEpoch = -1;
+
+        public void AcceptSlowStableTime(Pointstamp stamp)
+        {
+            IterationIn<Epoch> slowTime = new IterationIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b);
+
+            lock (this)
+            {
+                if (slowTime.outerTime.epoch != this.currentCompletedSlowEpoch)
+                {
+                    this.currentCompletedSlowEpoch = slowTime.outerTime.epoch;
+                    Console.WriteLine("Slow stable epoch " + this.currentCompletedSlowEpoch);
+                }
             }
         }
 
-        private Dictionary<IterationIn<Epoch>, long> slowBatches = new Dictionary<IterationIn<Epoch>, long>();
-        private Dictionary<IterationIn<IterationIn<Epoch>>, long> ccBatches = new Dictionary<IterationIn<IterationIn<Epoch>>, long>();
-
-        private long RoundBatch(long batchTime)
+        public void AcceptCCReduceStableTime(Pointstamp stamp)
         {
-            long millisecondsSinceStartup = this.computation.TicksSinceStartup / TimeSpan.TicksPerMillisecond;
-            return millisecondsSinceStartup - (millisecondsSinceStartup % batchTime) + batchTime;
+            KeyValuePair<IterationIn<IterationIn<Epoch>>, long>[] earlier;
+            lock (this.ccBatchEntryTime)
+            {
+                earlier = this.ccBatchEntryTime
+                    .Where(b => FTFrontier.IsLessThanOrEqualTo(b.Key.ToPointstamp(stamp.Location), stamp))
+                    .ToArray();
+                foreach (var batch in earlier.Select(b => b.Key))
+                {
+                    this.ccBatchEntryTime.Remove(batch);
+                }
+            }
+
+            long now = DateTime.Now.Ticks;
+            foreach (var ccBatch in earlier)
+            {
+                Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + ((double)(now - ccBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
+            }
         }
 
-        void FeedThread(Pair<long,long> firstBatchTime)
+        public void AcceptSlowReduceStableTime(Pointstamp stamp)
         {
-            long nextSlowBatch = firstBatchTime.First;
-            long nextCCBatch = firstBatchTime.Second;
+            KeyValuePair<IterationIn<Epoch>, long>[] earlier;
+            lock (this.slowBatchEntryTime)
+            {
+                earlier = this.slowBatchEntryTime
+                    .Where(b => FTFrontier.IsLessThanOrEqualTo(b.Key.ToPointstamp(stamp.Location), stamp))
+                    .ToArray();
+                foreach (var batch in earlier.Select(b => b.Key))
+                {
+                    this.slowBatchEntryTime.Remove(batch);
+                }
+            }
 
-            Random oldRandom = new Random(this.randomSeed);
+            long now = DateTime.Now.Ticks;
+            foreach (var slowBatch in earlier)
+            {
+                Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + ((double)(now - slowBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
+            }
+        }
+
+        void HighThroughputBatchInitiator()
+        {
+            long now = DateTime.Now.Ticks;
+            long nextSlowBatch = now / TimeSpan.TicksPerMillisecond + Program.slowBatchTime;
+            long nextCCBatch = now / TimeSpan.TicksPerMillisecond + Program.ccBatchTime;
+
+            Epoch sendingSlowBatch = new Epoch(0);
+            IterationIn<Epoch> sendingCCBatch = new IterationIn<Epoch>(new Epoch(0), 0);
+
             while (true)
             {
-                Thread.Sleep(Program.htSleepTime);
-                //var minusBatch = MakeBatch(oldRandom, Program.htBatchSize, -1).ToArray();
-                //var plusBatch = MakeBatch(this.random, Program.htBatchSize, 1).ToArray();
-                var minusBatch = MakeBatch(oldRandom, 1, -1).ToArray();
-                var plusBatch = MakeBatch(this.random, 1, 1).ToArray();
+                now = DateTime.Now.Ticks;
 
-                long ticks = DateTime.Now.Ticks;
-                IterationIn<Epoch> slowBatchTime;
-                IterationIn<IterationIn<Epoch>> ccBatchTime;
-                Epoch? slowBatch = null;
-                IterationIn<Epoch>? ccBatch = null;
+                if (now / TimeSpan.TicksPerMillisecond > nextSlowBatch)
+                {
+                    sendingSlowBatch = new Epoch(sendingSlowBatch.epoch + 1);
+                    nextSlowBatch += Program.slowBatchTime;
+                }
+
+                if (now / TimeSpan.TicksPerMillisecond > nextCCBatch)
+                {
+                    sendingCCBatch = new IterationIn<Epoch>(sendingCCBatch.outerTime, sendingCCBatch.iteration + 1);
+                    nextCCBatch += Program.ccBatchTime;
+                }
+
                 lock (this)
                 {
-                    if (this.slowBatches.Count < 20 && this.ccBatches.Count < 20)
+                    if (this.currentCompletedSlowEpoch > sendingCCBatch.outerTime.epoch)
                     {
-                        if (ticks / TimeSpan.TicksPerMillisecond > nextSlowBatch)
-                        {
-                            slowBatch = this.slow.source.CompleteOuterBatch();
-                            nextSlowBatch += Program.slowBatchTime;
-                        }
-
-                        this.slow.source.OnNext(minusBatch);
-                        this.slow.source.OnNext(plusBatch);
-                        slowBatchTime = this.slow.source.CompleteInnerBatch();
-
-                        if (ticks / TimeSpan.TicksPerMillisecond > nextCCBatch)
-                        {
-                            ccBatch = this.cc.source.CompleteOuterBatch();
-                            nextCCBatch += Program.ccBatchTime;
-                        }
-
-                        this.cc.source.OnNext(minusBatch);
-                        this.cc.source.OnNext(plusBatch);
-                        ccBatchTime = this.cc.source.CompleteInnerBatch();
-
-                        this.slowBatches.Add(slowBatchTime, ticks);
-                        this.ccBatches.Add(ccBatchTime, ticks);
+                        sendingCCBatch = new IterationIn<Epoch>(new Epoch(this.currentCompletedSlowEpoch), 0);
                     }
                 }
 
-                if (this.processId == slowBase)
-                {
-                    if (slowBatch.HasValue)
-                    {
-                        this.SendSlowBatchTimes(slowBatch.Value, nextSlowBatch - Program.slowBatchTime);
-                    }
-                    if (ccBatch.HasValue)
-                    {
-                        Console.WriteLine("Sending batch time " + ccBatch.Value);
-                        this.SendCCBatchTimes(ccBatch.Value, nextCCBatch - Program.slowBatchTime);
-                    }
-                }
+                Console.WriteLine("Sending slow " + sendingSlowBatch + " cc " + sendingCCBatch);
+
+                // tell each input worker to start the next batch
+                this.batchCoordinator.OnNext(Enumerable
+                    .Range(Program.slowBase, Program.slowRange)
+                    .Select(i => i.PairWith(now.PairWith(sendingSlowBatch.PairWith(sendingCCBatch)))));
+
+                Thread.Sleep(Program.htSleepTime);
             }
         }
 
-        private void AcceptCCTime(Pointstamp stamp)
-        {
-            IterationIn<IterationIn<Epoch>> ccTime = new IterationIn<IterationIn<Epoch>>(
-                new IterationIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b), stamp.Timestamp.c);
+        private BatchMaker batchMaker;
+        private Epoch currentSlowBatch = new Epoch(0);
+        private IterationIn<Epoch> nextSlowInnerBatch = new IterationIn<Epoch>(new Epoch(0), 0);
+        private IterationIn<Epoch> currentCCBatch = new IterationIn<Epoch>(new Epoch(0), 0);
+        private IterationIn<IterationIn<Epoch>> nextCCInnerBatch = new IterationIn<IterationIn<Epoch>>(new IterationIn<Epoch>(new Epoch(0), 0), 0);
 
-            lock (this)
+        private readonly Dictionary<IterationIn<Epoch>, long> slowBatchEntryTime = new Dictionary<IterationIn<Epoch>, long>();
+        private readonly Dictionary<IterationIn<IterationIn<Epoch>>, long> ccBatchEntryTime = new Dictionary<IterationIn<IterationIn<Epoch>>, long>();
+
+        void SendBatch(long entryTicks, Epoch slowBatch, IterationIn<Epoch> ccBatch)
+        {
+            var batch = this.batchMaker.NextBatch(entryTicks);
+
+            // tell each slow worker to start the next batch
+            if (!this.currentSlowBatch.Equals(slowBatch))
             {
-                long ticks = DateTime.Now.Ticks;
-                foreach (var time in this.ccBatches.Where(t => t.Key.LessThan(ccTime)).ToArray())
+                this.slow.source.CompleteOuterBatch(new Epoch(slowBatch.epoch - 1));
+                this.currentSlowBatch = slowBatch;
+                this.nextSlowInnerBatch = new IterationIn<Epoch>(this.currentSlowBatch, 0);
+            }
+
+            if (this.processId == Program.slowBase)
+            {
+                lock (this.slowBatchEntryTime)
                 {
-                    long latency = (ticks - time.Value) / TimeSpan.TicksPerMillisecond;
-                    this.WriteLog(String.Format("CC {0:D11} {1}", ticks, time.Key));
-                    Console.WriteLine("CC " + time.Key);
-                    this.ccBatches.Remove(time.Key);
+                    this.slowBatchEntryTime.Add(this.nextSlowInnerBatch, entryTicks);
                 }
             }
-        }
 
-        private void AcceptSlowBatchTime(Pointstamp stamp)
-        {
-            IterationIn<Epoch> slowTime = new IterationIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b);
-
-            lock (this)
+            this.slow.source.OnNext(batch);
+            this.slow.source.CompleteInnerBatch();
+            ++this.nextSlowInnerBatch.iteration;
+            
+            // tell each CC worker to start the next batch
+            if (!this.currentCCBatch.Equals(ccBatch))
             {
-                long ticks = DateTime.Now.Ticks;
-                foreach (var time in this.slowBatches.Where(t => t.Key.LessThan(slowTime)).ToArray())
+                if (ccBatch.iteration == 0)
                 {
-                    long latency = (ticks - time.Value) / TimeSpan.TicksPerMillisecond;
-                    this.WriteLog(String.Format("CC {0:D11} {1}", ticks, time.Key));
-                    Console.WriteLine("SLOW " + time.Key);
-                    this.slowBatches.Remove(time.Key);
+                    this.cc.source.CompleteOuterBatch(new IterationIn<Epoch>(new Epoch(ccBatch.outerTime.epoch - 1), int.MaxValue));
+                }
+                else
+                {
+                    this.cc.source.CompleteOuterBatch(new IterationIn<Epoch>(ccBatch.outerTime, ccBatch.iteration - 1));
+                }
+                this.currentCCBatch = ccBatch;
+                this.nextCCInnerBatch = new IterationIn<IterationIn<Epoch>>(this.currentCCBatch, 0);
+            }
+
+            if (this.processId == Program.slowBase)
+            {
+                lock (this.ccBatchEntryTime)
+                {
+                    this.ccBatchEntryTime.Add(this.nextCCInnerBatch, entryTicks);
                 }
             }
+
+            this.cc.source.OnNext(batch);
+            this.cc.source.CompleteInnerBatch();
+            ++this.nextCCInnerBatch.iteration;
         }
 
-        private int lastEpoch = -1;
-
-        private void AcceptSlowStableTime(Pointstamp stamp)
+        private void StartBatches()
         {
-            IterationIn<Epoch> slowTime = new IterationIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b);
-            bool start = false;
-            lock (this)
-            {
-                if (slowTime.outerTime.epoch != this.lastEpoch)
-                {
-                    this.lastEpoch = slowTime.outerTime.epoch;
-                    if (slowTime.outerTime.epoch == 0)
-                    {
-                        start = this.processId == slowBase;
-                    }
-                    else
-                    {
-                        this.cc.source.CompleteOuterBatch(new IterationIn<Epoch>(new Epoch(slowTime.outerTime.epoch - 1), int.MaxValue));
-                    }
-                }
-            }
-            if (start)
-            {
-                long firstSlowBatchTime = this.RoundBatch(slowBatchTime);
-                long firstCCBatchTime = this.RoundBatch(ccBatchTime);
-                this.batchCoordinator.OnNext(Enumerable.Range(0, slowRange).Select(i => i.PairWith(firstSlowBatchTime.PairWith(firstCCBatchTime))));
-            }
-        }
-
-        private void StartBatches(Pair<long, long> firstBatchTime)
-        {
-            var thread = new System.Threading.Thread(new System.Threading.ThreadStart(() => FeedThread(firstBatchTime)));
+            var thread = new System.Threading.Thread(new System.Threading.ThreadStart(this.HighThroughputBatchInitiator));
             thread.Start();
         }
 
         private void ReactToStable(object o, StageStableEventArgs args)
         {
-            if (args.stageId == this.slow.reduceStage)
-            {
-                this.AcceptSlowBatchTime(args.frontier[0]);
-            }
-            else if (args.stageId == this.cc.reduceStage)
-            {
-                this.AcceptCCTime(args.frontier[0]);
-            }
-            else if (args.stageId == this.perfect.slowStage)
+            if (args.stageId == this.perfect.slowStage)
             {
                 this.AcceptSlowStableTime(args.frontier[0]);
             }
-        }
-
-        private Dictionary<Epoch, long> slowBatchTimes = new Dictionary<Epoch,long>();
-        private Dictionary<IterationIn<Epoch>, long> ccBatchTimes = new Dictionary<IterationIn<Epoch>,long>();
-
-        private void SlowBatchTimes(Pair<Epoch,long> time)
-        {
-            lock (slowBatchTimes)
+            else if (args.stageId == this.cc.reduceStage)
             {
-                if (time.Second < 0)
-                {
-                    if (this.slowBatchTimes.ContainsKey(time.First))
-                    {
-                        this.slowBatchTimes.Remove(time.First);
-                    }
-                }
-                else
-                {
-                    this.slowBatchTimes.Add(time.First, time.Second);
-                }
+                this.AcceptCCReduceStableTime(args.frontier[0]);
             }
-        }
-
-        private void CCBatchTimes(Pair<IterationIn<Epoch>, long> time)
-        {
-            Console.WriteLine("Got cc time " + time.First);
-            lock (ccBatchTimes)
+            else if (args.stageId == this.slow.reduceStage)
             {
-                if (time.Second < 0)
-                {
-                    if (this.ccBatchTimes.ContainsKey(time.First))
-                    {
-                        this.ccBatchTimes.Remove(time.First);
-                    }
-                }
-                else
-                {
-                    this.ccBatchTimes.Add(time.First, time.Second);
-                }
+                this.AcceptSlowReduceStableTime(args.frontier[0]);
             }
-        }
-
-        private void SendSlowBatchTimes(Epoch batch, long ticks)
-        {
-            this.slowBatchSource.OnNext(Enumerable.Range(0, processes).Select(i =>
-                i.PairWith(batch.PairWith(ticks))));
-        }
-
-        private void SendCCBatchTimes(IterationIn<Epoch> batch, long ticks)
-        {
-            this.ccBatchSource.OnNext(Enumerable.Range(0, processes).Select(i =>
-                i.PairWith(batch.PairWith(ticks))));
         }
 
 #if false
@@ -1333,21 +1457,21 @@ namespace FaultToleranceExamples
         static private int htBatchSize = 10;
         static private int htInitialBatches = 100;
 #else
-        static private int slowBase = 1;
+        static private int slowBase = 0;
         static private int slowRange = 1;
-        static private int ccBase = 1;
+        static private int ccBase = 0;
         static private int ccRange = 1;
-        static private int fbBase = 1;
+        static private int fbBase = 0;
         static private int fbRange = 1;
-        static private int fpBase = 2;
+        static private int fpBase = 0;
         static private int fpRange = 1;
         static private int numberOfKeys = 10;
         static private int fastBatchSize = 1;
         static private int fastSleepTime = 1000;
-        static private int ccBatchTime = 5000;
-        static private int slowBatchTime = 20000;
+        static private int ccBatchTime = 2000;
+        static private int slowBatchTime = 4000;
         static private int htBatchSize = 100;
-        static private int htSleepTime = 2000;
+        static private int htSleepTime = 1000;
         static private int htInitialBatches = 10;
 #endif
 #endif
@@ -1359,9 +1483,7 @@ namespace FaultToleranceExamples
         private CCPipeline cc;
         private FastPipeline buggy;
         private FastPipeline perfect;
-        private BatchedDataSource<Pair<int,Pair<long,long>>> batchCoordinator;
-        private BatchedDataSource<Pair<int, Pair<Epoch,long>>> slowBatchSource;
-        private BatchedDataSource<Pair<int, Pair<IterationIn<Epoch>,long>>> ccBatchSource;
+        private BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, IterationIn<Epoch>>>>> batchCoordinator;
 
         public void Execute(string[] args)
         {
@@ -1370,6 +1492,7 @@ namespace FaultToleranceExamples
             Configuration conf = Configuration.FromArgs(ref args);
             this.processId = conf.ProcessID;
             this.processes = conf.Processes;
+            this.batchMaker = new BatchMaker(this.processes, this.processId);
 
             if (args.Length > 0 && args[0].ToLower() == "-azure")
             {
@@ -1381,7 +1504,7 @@ namespace FaultToleranceExamples
                 conf.CheckpointingFactory = s => new FileStreamSequence("checkpoint", s);
             }
 
-            conf.DefaultCheckpointInterval = 5000;
+            conf.DefaultCheckpointInterval = 50000;
 
             using (var computation = NewComputation.FromConfig(conf))
             {
@@ -1393,59 +1516,40 @@ namespace FaultToleranceExamples
 
                 Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
 
-                this.batchCoordinator = new BatchedDataSource<Pair<int, Pair<long, long>>>();
-                using (var p = computation.Placement(inputPlacement))
+                this.batchCoordinator = new BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, IterationIn<Epoch>>>>>();
+                using (var p = computation.WithPlacement(inputPlacement))
                 {
                     computation.NewInput(this.batchCoordinator).SetCheckpointType(CheckpointType.None)
                         .PartitionBy(x => x.First).SetCheckpointType(CheckpointType.None)
-                        .HelperStage(r => this.StartBatches(r));
-                }
-
-                Placement processPlacement = new Placement.ProcessRange(Enumerable.Range(0, conf.Processes), Enumerable.Range(0, 1));
-
-                using (var p = computation.Placement(processPlacement))
-                {
-                    this.slowBatchSource = new BatchedDataSource<Pair<int, Pair<Epoch, long>>>();
-                    computation.NewInput(this.slowBatchSource).SetCheckpointType(CheckpointType.None)
-                        .PartitionBy(x => x.First).SetCheckpointType(CheckpointType.None)
-                        .HelperStage(r => this.SlowBatchTimes(r));
-
-                    this.ccBatchSource = new BatchedDataSource<Pair<int, Pair<IterationIn<Epoch>, long>>>();
-                    computation.NewInput(this.ccBatchSource).SetCheckpointType(CheckpointType.None)
-                        .PartitionBy(x => x.First).SetCheckpointType(CheckpointType.None)
-                        .HelperStage(r => this.CCBatchTimes(r));
+                        .PartitionedActionStage(x => this.SendBatch(x.First, x.Second.First, x.Second.Second));
                 }
 
                 this.cc.Make(computation, inputPlacement, this.slow, this.buggy, this.perfect);
 
                 if (conf.ProcessID == 0)
                 {
-                    manager.Initialize(computation, slow.ToMonitor.Concat(cc.ToMonitor.Concat(perfect.ToMonitor.Concat(buggy.ToMonitor))).Distinct());
+                    manager.Initialize(computation, this.slow.ToMonitor.Concat(this.cc.ToMonitor.Concat(this.perfect.ToMonitor.Concat(this.buggy.ToMonitor))).Distinct());
                 }
 
                 //computation.OnStageStable += (x, y) => { Console.WriteLine(y.stageId + " " + y.frontier[0]); };
+
+                computation.Activate();
 
                 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
                 //computation.OnFrontierChange += (x, y) => { Console.WriteLine(stopwatch.Elapsed + "\t" + string.Join(", ", y.NewFrontier)); Console.Out.Flush(); };
 
                 if (Enumerable.Range(slowBase, slowRange).Contains(conf.ProcessID))
                 {
-                    computation.OnStageStable += this.ReactToStable;
-                    if (conf.ProcessID != slowBase)
+                    if (conf.ProcessID == slowBase)
+                    {
+                        computation.OnStageStable += this.ReactToStable;
+                        this.StartBatches();
+                    }
+                    else
                     {
                         this.batchCoordinator.OnCompleted();
                     }
                 }
-
-                if (conf.ProcessID != slowBase)
-                {
-                    this.slowBatchSource.OnCompleted();
-                    this.ccBatchSource.OnCompleted();
-                }
-
-                computation.Activate();
-
-                InitialBatch(conf.ProcessID, inputPlacement, slow.source, cc.source);
 
                 if (conf.ProcessID == 0)
                 {
@@ -1458,7 +1562,7 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
-                        //System.Threading.Thread.Sleep(Timeout.Infinite);
+                        System.Threading.Thread.Sleep(Timeout.Infinite);
                         System.Threading.Thread.Sleep(60000);
                         if (conf.Processes > 2)
                         {

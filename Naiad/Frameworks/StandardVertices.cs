@@ -623,6 +623,112 @@ namespace Microsoft.Research.Naiad.Dataflow.StandardVertices
         }
     }
 
+    /// <summary>
+    /// Vertex with three inputs, one output, which calls OnRecv1/OnRecv2/OnRecv3 for each input, and OnNotify(time) if ScheduleAt(time) is ever called.
+    /// </summary>
+    /// <typeparam name="TInput1">Source 1 record type</typeparam>
+    /// <typeparam name="TInput2">Source 2 record type</typeparam>
+    /// <typeparam name="TInput3">Source 3 record type</typeparam>
+    /// <typeparam name="TOutput">Result record type</typeparam>
+    /// <typeparam name="TTime">Time type</typeparam>
+    public abstract class TernaryVertex<TInput1, TInput2, TInput3, TOutput, TTime> : Vertex<TTime>
+        where TTime : Time<TTime>
+    {
+        /// <summary>
+        /// The buffer for output records.
+        /// </summary>
+        protected VertexOutputBuffer<TOutput, TTime> Output;
+
+        /// <summary>
+        /// Called when a message is received on the first input.
+        /// </summary>
+        /// <param name="message">The message.</param>
+        public abstract void OnReceive1(Message<TInput1, TTime> message);
+
+        /// <summary>
+        /// Called when a message is received on the second input.
+        /// </summary>
+        /// <param name="message">The message.</param>
+        public abstract void OnReceive2(Message<TInput2, TTime> message);
+
+        /// <summary>
+        /// Called when a message is received on the third input.
+        /// </summary>
+        /// <param name="message">The message.</param>
+        public abstract void OnReceive3(Message<TInput3, TTime> message);
+
+        /// <summary>
+        /// Creates a new stream from the output of a stage of BinaryVertex objects.
+        /// </summary>
+        /// <param name="stream1">first input stream</param>
+        /// <param name="stream2">second input stream</param>
+        /// <param name="stream3">third input stream</param>
+        /// <param name="factory">factory from index and stage to BinaryVertex</param>
+        /// <param name="input1PartitionBy">first input partitioning requirement</param>
+        /// <param name="input2PartitionBy">second input partitioning requirement</param>
+        /// <param name="input3PartitionBy">third input partitioning requirement</param>
+        /// <param name="outputPartitionBy">output partitioning guarantee</param>
+        /// <param name="name">friendly name</param>
+        /// <returns>the output stream of the corresponding binary stage.</returns>
+        public static Stream<TOutput, TTime> MakeStage(Stream<TInput1, TTime> stream1, Stream<TInput2, TTime> stream2, Stream<TInput3, TTime> stream3,
+            Func<int, Stage<TTime>, TernaryVertex<TInput1, TInput2, TInput3, TOutput, TTime>> factory,
+            Expression<Func<TInput1, int>> input1PartitionBy, Expression<Func<TInput2, int>> input2PartitionBy, Expression<Func<TInput3, int>> input3PartitionBy,
+            Expression<Func<TOutput, int>> outputPartitionBy, string name)
+        {
+            var stage = Foundry.NewStage(stream1.Context, factory, name);
+
+            var input1 = stage.NewInput(stream1, (message, vertex) => vertex.OnReceive1(message), input1PartitionBy);
+            var input2 = stage.NewInput(stream2, (message, vertex) => vertex.OnReceive2(message), input2PartitionBy);
+            var input3 = stage.NewInput(stream3, (message, vertex) => vertex.OnReceive3(message), input3PartitionBy);
+
+            var output = stage.NewOutput(vertex => vertex.Output, outputPartitionBy);
+
+            return output;
+        }
+
+        /// <summary>
+        /// Creates a new stream from the output of a stage of BinaryVertex objects.
+        /// </summary>
+        /// <param name="placement">Placement to use for vertices in the stage</param>
+        /// <param name="stream1">first input stream</param>
+        /// <param name="stream2">second input stream</param>
+        /// <param name="stream3">third input stream</param>
+        /// <param name="factory">factory from index and stage to BinaryVertex</param>
+        /// <param name="input1PartitionBy">first input partitioning requirement</param>
+        /// <param name="input2PartitionBy">second input partitioning requirement</param>
+        /// <param name="input3PartitionBy">third input partitioning requirement</param>
+        /// <param name="outputPartitionBy">output partitioning guarantee</param>
+        /// <param name="name">friendly name</param>
+        /// <returns>the output stream of the corresponding binary stage.</returns>
+        public static Stream<TOutput, TTime> MakeStage(Placement placement,
+            Stream<TInput1, TTime> stream1, Stream<TInput2, TTime> stream2, Stream<TInput3, TTime> stream3,
+            Func<int, Stage<TTime>, TernaryVertex<TInput1, TInput2, TInput3, TOutput, TTime>> factory,
+            Expression<Func<TInput1, int>> input1PartitionBy, Expression<Func<TInput2, int>> input2PartitionBy, Expression<Func<TInput3, int>> input3PartitionBy,
+            Expression<Func<TOutput, int>> outputPartitionBy, string name)
+        {
+            var stage = Foundry.NewStage(placement, stream1.Context, factory, name);
+
+            var input1 = stage.NewInput(stream1, (message, vertex) => vertex.OnReceive1(message), input1PartitionBy);
+            var input2 = stage.NewInput(stream2, (message, vertex) => vertex.OnReceive2(message), input2PartitionBy);
+            var input3 = stage.NewInput(stream3, (message, vertex) => vertex.OnReceive3(message), input3PartitionBy);
+
+            var output = stage.NewOutput(vertex => vertex.Output, outputPartitionBy);
+
+            return output;
+        }
+
+        /// <summary>
+        /// Creates a new TernaryVertex
+        /// </summary>
+        /// <param name="index">vertex index</param>
+        /// <param name="stage">host stage</param>
+        public TernaryVertex(int index, Stage<TTime> stage)
+            : base(index, stage)
+        {
+            this.Output = new VertexOutputBuffer<TOutput, TTime>(this);
+        }
+    }
+
     #endregion
 
     #region Buffering Vertices and Stages
@@ -901,6 +1007,35 @@ namespace Microsoft.Research.Naiad.Dataflow.StandardVertices
             where TTime : Time<TTime>
         {
             return BinaryVertex<TInput1, TInput2, TOutput, TTime>.MakeStage(source, other, factory, input1PartitionBy, input2PartitionBy, outputPartitionBy, name);
+        }
+
+        /// <summary>
+        /// Creates a new stage with three inputs and one output
+        /// </summary>
+        /// <typeparam name="TInput1">First source type</typeparam>
+        /// <typeparam name="TInput2">Second source type</typeparam>
+        /// <typeparam name="TInput3">Third source type</typeparam>
+        /// <typeparam name="TOutput">Result type</typeparam>
+        /// <typeparam name="TTime">Time type</typeparam>
+        /// <param name="source">First source of records</param>
+        /// <param name="other">Second source of records</param>
+        /// <param name="other2">Third source of records</param>
+        /// <param name="factory">Vertex factory</param>
+        /// <param name="input1PartitionBy">First partitioning requirement</param>
+        /// <param name="input2PartitionBy">Second partitioning requirement</param>
+        /// <param name="input3PartitionBy">Third partitioning requirement</param>
+        /// <param name="outputPartitionBy">Partitioning guarantee</param>
+        /// <param name="name">Descriptive name</param>
+        /// <returns>The stage's output</returns>
+        public static Stream<TOutput, TTime> NewTernaryStage<TInput1, TInput2, TInput3, TOutput, TTime>(
+            this Stream<TInput1, TTime> source, Stream<TInput2, TTime> other, Stream<TInput3, TTime> other2,
+            Func<int, Stage<TTime>, TernaryVertex<TInput1, TInput2, TInput3, TOutput, TTime>> factory,
+            Expression<Func<TInput1, int>> input1PartitionBy, Expression<Func<TInput2, int>> input2PartitionBy, Expression<Func<TInput3, int>> input3PartitionBy,
+            Expression<Func<TOutput, int>> outputPartitionBy, string name)
+            where TTime : Time<TTime>
+        {
+            return TernaryVertex<TInput1, TInput2, TInput3, TOutput, TTime>.MakeStage(
+                source, other, other2, factory, input1PartitionBy, input2PartitionBy, input3PartitionBy, outputPartitionBy, name);
         }
 
         /// <summary>

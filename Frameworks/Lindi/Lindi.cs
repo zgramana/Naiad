@@ -686,11 +686,12 @@ namespace Microsoft.Research.Naiad.Frameworks.Lindi
         /// <typeparam name="TTime">The type of timestamp on each record.</typeparam>
         /// <param name="stream">The input stream.</param> 
         /// <returns>The stream containing pairs of a record and its respective count for each input record.</returns>
-        public static Stream<Pair<TRecord, Int64>, TTime> Count<TRecord, TTime>(this Stream<TRecord, TTime> stream) where TTime : Time<TTime>
+        public static Stream<Pair<TRecord, Int64>, TTime> Count<TRecord, TTime>(this Stream<TRecord, TTime> stream,
+            Func<int, ICheckpointPolicy> checkpointPolicy = null) where TTime : Time<TTime>
         {
             if (stream == null) throw new ArgumentNullException("stream");
-            return stream.Select(x => x.PairWith(1L))
-                         .Aggregate((a, b) => a + b, true);
+            return stream.Select(x => x.PairWith(1L)).SetCheckpointPolicy(checkpointPolicy)
+                         .Aggregate((a, b) => a + b, true, checkpointPolicy);
         }
 
         /// <summary>
@@ -703,16 +704,18 @@ namespace Microsoft.Research.Naiad.Frameworks.Lindi
         /// <param name="stream">The input stream.</param>
         /// <param name="keySelector">Function that extracts a key from each record.</param>
         /// <param name="valueSelector">Function that extracts from each record the value to be used in the comparison.</param>
+        /// <param name="checkpointPolicy">Optional checkpoint factory for the constituent stages</param>
         /// <returns>The stream of one key-value pair for each key and the respective minimum value in the input stream.</returns>
-        public static Stream<Pair<TKey, TValue>, TTime> Min<TInput, TKey, TValue, TTime>(this Stream<TInput, TTime> stream, Func<TInput, TKey> keySelector, Func<TInput, TValue> valueSelector)
+        public static Stream<Pair<TKey, TValue>, TTime> Min<TInput, TKey, TValue, TTime>(this Stream<TInput, TTime> stream, Func<TInput, TKey> keySelector, Func<TInput, TValue> valueSelector,
+            Func<int, ICheckpointPolicy> checkpointPolicy = null)
             where TTime : Time<TTime>
             where TValue : IComparable<TValue>
         {
             if (stream == null) throw new ArgumentNullException("stream");
             if (keySelector == null) throw new ArgumentNullException("keySelector");
             if (valueSelector == null) throw new ArgumentNullException("valueSelector");
-            return stream.Select(x => keySelector(x).PairWith(valueSelector(x)))
-                         .Aggregate((a, b) => a.CompareTo(b) < 0 ? a : b, true);
+            return stream.Select(x => keySelector(x).PairWith(valueSelector(x))).SetCheckpointPolicy(checkpointPolicy)
+                         .Aggregate((a, b) => a.CompareTo(b) < 0 ? a : b, true, checkpointPolicy);
         }
 
         /// <summary>
@@ -725,16 +728,18 @@ namespace Microsoft.Research.Naiad.Frameworks.Lindi
         /// <param name="stream">The input stream.</param>
         /// <param name="keySelector">Function that extracts a key from each record.</param>
         /// <param name="valueSelector">Function that extracts from each record the value to be used in the comparison.</param>
+        /// <param name="checkpointPolicy">Optional checkpoint factory for the constituent stages</param>
         /// <returns>The stream of one key-value pair for each key and the respective maximum value in the input stream.</returns>
-        public static Stream<Pair<TKey, TValue>, TTime> Max<TInput, TKey, TValue, TTime>(this Stream<TInput, TTime> stream, Func<TInput, TKey> keySelector, Func<TInput, TValue> valueSelector)
+        public static Stream<Pair<TKey, TValue>, TTime> Max<TInput, TKey, TValue, TTime>(this Stream<TInput, TTime> stream, Func<TInput, TKey> keySelector, Func<TInput, TValue> valueSelector,
+            Func<int, ICheckpointPolicy> checkpointPolicy = null)
             where TTime : Time<TTime>
             where TValue : IComparable<TValue>
         {
             if (stream == null) throw new ArgumentNullException("stream");
             if (keySelector == null) throw new ArgumentNullException("keySelector");
             if (valueSelector == null) throw new ArgumentNullException("valueSelector");
-            return stream.Select(x => keySelector(x).PairWith(valueSelector(x)))
-                         .Aggregate((a, b) => a.CompareTo(b) > 0 ? a : b, true);
+            return stream.Select(x => keySelector(x).PairWith(valueSelector(x))).SetCheckpointPolicy(checkpointPolicy)
+                         .Aggregate((a, b) => a.CompareTo(b) > 0 ? a : b, true, checkpointPolicy);
         }
 
         /// <summary>
@@ -814,17 +819,21 @@ namespace Microsoft.Research.Naiad.Frameworks.Lindi
         /// <param name="stream">The input stream.</param>
         /// <param name="combiner">A function from current state and incoming update, to the new state.</param>
         /// <param name="locallyCombine">If <c>true</c>, perform local aggregation on each worker before global aggregation.</param>
+        /// <param name="checkpointPolicy">Optional checkpoint factory for the constituent stages</param>
         /// <returns>The stream of one key-value pair for each key and the respective final combined state in the input stream.</returns>
-        public static Stream<Pair<TKey, TState>, TTime> Aggregate<TKey, TState, TTime>(this Stream<Pair<TKey, TState>, TTime> stream, Func<TState, TState, TState> combiner, bool locallyCombine)
+        public static Stream<Pair<TKey, TState>, TTime> Aggregate<TKey, TState, TTime>(this Stream<Pair<TKey, TState>, TTime> stream, Func<TState, TState, TState> combiner, bool locallyCombine,
+            Func<int, ICheckpointPolicy> checkpointPolicy = null)
             where TTime : Time<TTime>
         {
             if (stream == null) throw new ArgumentNullException("stream");
             if (combiner == null) throw new ArgumentNullException("combiner");
             if (locallyCombine)
                 return stream.NewUnaryStage((i, s) => new AggregateVertex<TKey, TState, TTime>(i, s, combiner), null, null, "Combiner").SetCheckpointType(CheckpointType.Stateless)
-                             .NewUnaryStage((i, s) => new AggregateVertex<TKey, TState, TTime>(i, s, combiner), x => x.First.GetHashCode(), x => x.First.GetHashCode(), "Combiner").SetCheckpointType(CheckpointType.Stateless);
+                    .SetCheckpointPolicy(checkpointPolicy)
+                    .NewUnaryStage((i, s) => new AggregateVertex<TKey, TState, TTime>(i, s, combiner), x => x.First.GetHashCode(), x => x.First.GetHashCode(), "Combiner").SetCheckpointType(CheckpointType.Stateless)
+                    .SetCheckpointPolicy(checkpointPolicy);
             else
-                return stream.Aggregate(combiner);
+                return stream.Aggregate(combiner).SetCheckpointPolicy(checkpointPolicy);
         }
 
         internal class AggregateVertex<TKey, TState, TTime> : UnaryVertex<Pair<TKey, TState>, Pair<TKey, TState>, TTime>
