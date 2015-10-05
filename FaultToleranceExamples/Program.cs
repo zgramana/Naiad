@@ -205,7 +205,7 @@ namespace FaultToleranceExamples
                 get { return new int[] { reduceStage }; }
             }
 
-            public Pair<Collection<Record, Epoch>, Stream<Pair<long, long>, Epoch>> Make(Computation computation)
+            public Pair<Stream<Record, Epoch>, Stream<Pair<long, long>, Epoch>> Make(Computation computation)
             {
                 this.source = new SubBatchDataSource<HTRecord, Epoch>();
 
@@ -213,7 +213,7 @@ namespace FaultToleranceExamples
                     new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
                         Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
 
-                Collection<Record, Epoch> weighted;
+                Stream<Record, Epoch> computed;
                 Stream<Pair<long, long>, Epoch> window;
 
                 using (var p = computation.WithPlacement(placement))
@@ -226,26 +226,26 @@ namespace FaultToleranceExamples
                                 return this.Reduce(input);
                             });
 
-                    var computed = this.Compute(reduced);
+                    computed = this.Compute(reduced);
 
-                    weighted = computed
-                        .Select(r =>
-                        {
-                            if (r.EntryTicks < 0)
-                            {
-                                r.EntryTicks = -r.EntryTicks;
-                                return new Weighted<Record>(r, -1);
-                            }
-                            else
-                            {
-                                return new Weighted<Record>(r, 1);
-                            }
-                        }).AsCollection(false);
+                    //weighted = computed
+                    //    .Select(r =>
+                    //    {
+                    //        if (r.EntryTicks < 0)
+                    //        {
+                    //            r.EntryTicks = -r.EntryTicks;
+                    //            return new Weighted<Record>(r, -1);
+                    //        }
+                    //        else
+                    //        {
+                    //            return new Weighted<Record>(r, 1);
+                    //        }
+                    //    }).AsCollection(false);
 
                     window = this.TimeWindow(reduced, placement.Count);
                 }
 
-                return weighted.PairWith(window);
+                return computed.PairWith(window);
             }
 
             public SlowPipeline(int baseProc, int range)
@@ -834,7 +834,7 @@ namespace FaultToleranceExamples
             HashSet<Program.FastPipeline.StaggeredJoinVertex<Record, CCPipeline.Record, int, BatchIn<BatchIn<Epoch>>, BatchIn<Epoch>>> ccVertices;
 
             public void Make(Computation computation,
-                Collection<SlowPipeline.Record, BatchIn<Epoch>> slowOutput,
+                Stream<SlowPipeline.Record, BatchIn<Epoch>> slowOutput,
                 Stream<Pair<long, long>, BatchIn<Epoch>> slowTimeWindow,
                 Collection<CCPipeline.Record, BatchIn<Epoch>> ccOutput,
                 Stream<Pair<long, long>, BatchIn<Epoch>> ccTimeWindow)
@@ -1033,7 +1033,7 @@ namespace FaultToleranceExamples
                         }
 
                         //buggy.Make(computation, c.EnterLoop(slowOutput.Output).AsCollection(false), cc);
-                        perfect.Make(computation, c.EnterBatch(slowOutput.First.Output).AsCollection(false), c.EnterBatch(slowOutput.Second), cc, ccWindow);
+                        perfect.Make(computation, c.EnterBatch(slowOutput.First), c.EnterBatch(slowOutput.Second), cc, ccWindow);
 
                         return cc;
                     });
@@ -1202,9 +1202,9 @@ namespace FaultToleranceExamples
 
             private int batchesReturned = 0;
 
-            public IEnumerable<HTRecord> NextBatch(long entryTicks)
+            public Pair<IEnumerable<HTRecord>,IEnumerable<HTRecord>> NextBatch(long entryTicks)
             {
-                IEnumerable<HTRecord> batch;
+                IEnumerable<HTRecord> inBatch, outBatch = new HTRecord[0];
 
                 if (batchesReturned == 0)
                 {
@@ -1216,19 +1216,19 @@ namespace FaultToleranceExamples
                     this.removeRandom = new Random(randomSeed);
 
                     // add all the records that are not going to get removed.
-                    batch = this.MakeStartingBatch(thisProcessRandom);
+                    inBatch = this.MakeStartingBatch(thisProcessRandom);
                 }
                 else
                 {
-                    batch = this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks);
+                    inBatch = this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks).ToArray();
                     if (this.batchesReturned >= Program.htInitialBatches)
                     {
-                        batch = batch.Concat(this.MakeBatch(this.removeRandom, Program.htBatchSize, -1));
+                        outBatch = this.MakeBatch(this.removeRandom, Program.htBatchSize, -1).ToArray();
                     }
                 }
 
                 ++this.batchesReturned;
-                return batch.ToArray();
+                return inBatch.PairWith(outBatch);
             }
 
             public BatchMaker(int processes, int processId)
@@ -1369,7 +1369,7 @@ namespace FaultToleranceExamples
                 }
             }
 
-            this.slow.source.OnNext(batch);
+            this.slow.source.OnNext(batch.First);
             this.slow.source.CompleteInnerBatch();
             ++this.nextSlowInnerBatch.batch;
             
@@ -1396,7 +1396,7 @@ namespace FaultToleranceExamples
                 }
             }
 
-            this.cc.source.OnNext(batch);
+            this.cc.source.OnNext(batch.First.Concat(batch.Second));
             this.cc.source.CompleteInnerBatch();
             ++this.nextCCInnerBatch.batch;
         }
