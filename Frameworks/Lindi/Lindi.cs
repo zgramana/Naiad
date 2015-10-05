@@ -685,6 +685,7 @@ namespace Microsoft.Research.Naiad.Frameworks.Lindi
         /// <typeparam name="TRecord">The type of the input records.</typeparam>
         /// <typeparam name="TTime">The type of timestamp on each record.</typeparam>
         /// <param name="stream">The input stream.</param> 
+        /// <param name="checkpointPolicy">Optional checkpoint factory for the constituent stages</param>
         /// <returns>The stream containing pairs of a record and its respective count for each input record.</returns>
         public static Stream<Pair<TRecord, Int64>, TTime> Count<TRecord, TTime>(this Stream<TRecord, TTime> stream,
             Func<int, ICheckpointPolicy> checkpointPolicy = null) where TTime : Time<TTime>

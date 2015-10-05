@@ -68,7 +68,7 @@ namespace Microsoft.Research.Naiad.Dataflow.Iteration
 
         internal static Stream<R, IterationIn<T>> NewStage(Stream<R, T> input, Func<R, int> initialIteration)
         {
-            var stage = new Stage<IngressVertex<R, T>, T>(input.ForStage.InternalComputation, Stage.OperatorType.IterationIngress,
+            var stage = new Stage<IngressVertex<R, T>, T>(input.ForStage.InternalComputation, Stage.OperatorType.Ingress,
                 (i, v) => new IngressVertex<R, T>(i, v, initialIteration), "FixedPoint.Ingress");
             stage.SetCheckpointType(CheckpointType.Stateless);
 
@@ -196,7 +196,7 @@ namespace Microsoft.Research.Naiad.Dataflow.Iteration
         internal static Stream<R, T> NewStage(Stream<R, IterationIn<T>> input, int iterationNumber)
         {
             var stage = new Stage<EgressVertex<R, T>, IterationIn<T>>(
-                input.ForStage.InternalComputation, Stage.OperatorType.IterationEgress,
+                input.ForStage.InternalComputation, Stage.OperatorType.Egress,
                 (i, v) => new EgressVertex<R, T>(i, v, iterationNumber), "FixedPoint.Egress");
             stage.SetCheckpointType(CheckpointType.Stateless);
 

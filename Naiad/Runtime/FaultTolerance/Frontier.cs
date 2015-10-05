@@ -486,11 +486,11 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
             {
                 return this.ProjectIteration(nodeId);
             }
-            else if (stage.IsIterationIngress)
+            else if (stage.IsIngress)
             {
                 return this.ProjectIngress(nodeId);
             }
-            else if (stage.IsIterationEgress)
+            else if (stage.IsEgress)
             {
                 return this.ProjectEgress(nodeId);
             }

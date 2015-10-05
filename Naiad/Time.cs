@@ -406,4 +406,158 @@ namespace Microsoft.Research.Naiad.Dataflow
             return this;
         }
     }
+
+    /// <summary>
+    /// Represents the logical timestamp containing a batch number nested within another logical <typeparamref name="TTime"/> context.
+    /// </summary>
+    /// <typeparam name="TTime">The type of the outer timestamp.</typeparam>
+    public struct BatchIn<TTime> : Time<BatchIn<TTime>>
+        where TTime : Time<TTime>
+    {
+        /// <summary>
+        /// The outer time.
+        /// </summary>
+        public TTime outerTime;
+
+        /// <summary>
+        /// The batch number.
+        /// </summary>
+        public int batch;
+
+        /// <summary>
+        /// Compares this timestamp with the <paramref name="other"/> timestamp.
+        /// </summary>
+        /// <param name="other">The other timestamp.</param>
+        /// <returns>A value that indicates the relative order of the objects being compared.</returns>
+        public int CompareTo(BatchIn<TTime> other)
+        {
+            var sCompare = this.outerTime.CompareTo(other.outerTime);
+            if (sCompare != 0)
+                return sCompare;
+            else
+                return this.batch - other.batch;
+        }
+
+        /// <summary>
+        /// Returns <c>true</c> if and only if this timestamp is equal to the <paramref name="other"/>
+        /// timestamp.
+        /// </summary>
+        /// <param name="other">The other timestamp.</param>
+        /// <returns><c>true</c> if and only if <c>this</c> is equal to <c>other</c>.</returns>
+        public bool Equals(BatchIn<TTime> other)
+        {
+            return this.batch == other.batch && this.outerTime.Equals(other.outerTime);
+        }
+
+        /// <summary>
+        /// Returns <c>true</c> if and only if this timestamp is less than or equal to the <paramref name="other"/>
+        /// timestamp.
+        /// </summary>
+        /// <param name="other">The other timestamp.</param>
+        /// <returns><c>true</c> if and only if <c>this</c> is less than or equal to <c>other</c>.</returns>
+        public bool LessThan(BatchIn<TTime> other)
+        {
+            if (this.outerTime.LessThan(other.outerTime))
+            {
+                // this outerTime is less than or equal to other.outerTime
+                if (this.outerTime.Equals(other.outerTime))
+                {
+                    return this.batch <= other.batch;
+                }
+                else
+                {
+                    // this outerTime is strictly less than other.outerTime
+                    return true;
+                }
+            }
+            else
+            {
+                // this outerTime is greater than the other outerTime
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Returns a string representation of this timestamp.
+        /// </summary>
+        /// <returns>A string representation of this timestamp.</returns>
+        public override string ToString()
+        {
+            return String.Format("[{0}, {1}]", outerTime.ToString(), batch.ToString());
+        }
+
+        /// <summary>
+        /// Returns a hashcode for this epoch.
+        /// </summary>
+        /// <returns>A hashcode for this epoch.</returns>
+        public override int GetHashCode()
+        {
+            return 134123 * outerTime.GetHashCode() + batch;
+        }
+
+        /// <summary>
+        /// The number of integer coordinates in timestamps of this type.
+        /// </summary>
+        public int Coordinates { get { return outerTime.Coordinates + 1; } }
+
+        /// <summary>
+        /// Populates a <see cref="Pointstamp"/> from this timestamp.
+        /// </summary>
+        /// <param name="pointstamp">The <see cref="Pointstamp"/> to be populated.</param>
+        /// <returns>The number of coordinates populated.</returns>
+        public int Populate(ref Pointstamp pointstamp)
+        {
+            var position = outerTime.Populate(ref pointstamp);
+            if (position < pointstamp.Timestamp.Length)
+                pointstamp.Timestamp[position] = batch;
+
+            return position + 1;
+        }
+
+        /// <summary>
+        /// Returns the later of this and the <paramref name="other"/> timestamps.
+        /// </summary>
+        /// <param name="other">The other timestamp.</param>
+        /// <returns>The later of this and the <paramref name="other"/> timestamps.</returns>
+        public BatchIn<TTime> Join(BatchIn<TTime> other)
+        {
+            if (this.LessThan(other))
+                return other;
+            else
+                return this;
+        }
+
+        /// <summary>
+        /// Returns the earlier of this and the <paramref name="other"/> timestamps.
+        /// </summary>
+        /// <param name="other">The other timestamps.</param>
+        /// <returns>The earlier of this and the <paramref name="other"/> timestamps.</returns>
+        public BatchIn<TTime> Meet(BatchIn<TTime> other)
+        {
+            if (this.LessThan(other))
+                return this;
+            else
+                return other;
+        }
+
+        /// <summary>
+        /// Constructs a new timestamp from an outer time and the given loop counter.
+        /// </summary>
+        /// <param name="outerTime">The outer time.</param>
+        /// <param name="batch">The batch number.</param>
+        public BatchIn(TTime outerTime, int batch) { this.outerTime = outerTime; this.batch = batch; }
+
+        /// <summary>
+        /// Returns a timestamp initialized from the given <paramref name="pointstamp"/>.
+        /// </summary>
+        /// <param name="pointstamp">The pointstamp.</param>
+        /// <param name="length">The number of coordinates to use.</param>
+        /// <returns>The initialized epoch.</returns>
+        public BatchIn<TTime> InitializeFrom(Pointstamp pointstamp, int length)
+        {
+            batch = pointstamp.Timestamp[length - 1];
+            outerTime = outerTime.InitializeFrom(pointstamp, length - 1);
+            return this;
+        }
+    }
 }

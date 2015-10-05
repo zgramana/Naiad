@@ -99,8 +99,8 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
                 this.Index = stage.StageId;
                 this.Depth = stage.DefaultVersion.Timestamp.Length;
 
-                this.Ingress = stage.IsIterationIngress;
-                this.Egress = stage.IsIterationEgress;
+                this.Ingress = stage.IsIngress;
+                this.Egress = stage.IsEgress;
                 this.Advance = stage.IsIterationAdvance;
 
                 this.Neighbors = new int[stage.Targets.Count];
@@ -114,11 +114,11 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
             {
                 this.Index = edge.ChannelId;
                 this.Depth = edge.SourceStage.DefaultVersion.Timestamp.Length;
-                if (edge.SourceStage.IsIterationIngress)
+                if (edge.SourceStage.IsIngress)
                 {
                     ++this.Depth;
                 }
-                if (edge.SourceStage.IsIterationEgress)
+                if (edge.SourceStage.IsEgress)
                 {
                     --this.Depth;
                 }

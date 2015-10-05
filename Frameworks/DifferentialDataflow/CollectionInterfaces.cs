@@ -818,7 +818,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
     /// </summary>
     /// <typeparam name="TRecord">The type of records in this collection.</typeparam>
     /// <typeparam name="TTime">The time type of records in the outer batch.</typeparam>
-    public interface SubBatchInputCollection<TRecord, TTime> : Collection<TRecord, IterationIn<TTime>>, IObserver<IEnumerable<Weighted<TRecord>>>
+    public interface SubBatchInputCollection<TRecord, TTime> : Collection<TRecord, BatchIn<TTime>>, IObserver<IEnumerable<Weighted<TRecord>>>
         where TRecord : IEquatable<TRecord>
         where TTime: Time<TTime>
     {

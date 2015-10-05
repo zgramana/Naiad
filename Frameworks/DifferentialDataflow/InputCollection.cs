@@ -111,15 +111,15 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
         /// <param name="computation">computation graph</param>
         /// <param name="entryComputation">function within the subgraph</param>
         /// <returns>the function after exiting the subbatches</returns>
-        public static Collection<S, T> BatchedEntry<S, T>(this Computation computation, Func<Dataflow.Iteration.LoopContext<T>, Collection<S, IterationIn<T>>> entryComputation)
+        public static Collection<S, T> BatchedEntry<S, T>(this Computation computation, Func<Dataflow.BatchEntry.BatchContext<T>, Collection<S, BatchIn<T>>> entryComputation)
             where S : IEquatable<S>
             where T : Time<T>
         {
-            var helper = new Dataflow.Iteration.LoopContext<T>(computation.Context);
+            var helper = new Dataflow.BatchEntry.BatchContext<T>();
 
             var batchedOutput = entryComputation(helper);
 
-            return helper.ExitLoop(batchedOutput.Output).ToCollection();
+            return helper.ExitBatch(batchedOutput.Output).ToCollection();
         }
     }
 
@@ -163,14 +163,14 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
         }
     }
 
-    internal class SubBatchIncrementalCollection<R, T> : TypedCollection<R, IterationIn<T>>, SubBatchInputCollection<R, T>
+    internal class SubBatchIncrementalCollection<R, T> : TypedCollection<R, BatchIn<T>>, SubBatchInputCollection<R, T>
         where R : IEquatable<R>
         where T : Time<T>
     {
         private readonly Microsoft.Research.Naiad.Input.SubBatchDataSource<Weighted<R>, T> inputVertex;
-        private readonly Stream<Weighted<R>, IterationIn<T>> stream;
+        private readonly Stream<Weighted<R>, BatchIn<T>> stream;
 
-        public override Stream<Weighted<R>, IterationIn<T>> Output
+        public override Stream<Weighted<R>, BatchIn<T>> Output
         {
             get { return this.stream; }
         }

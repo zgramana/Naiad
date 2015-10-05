@@ -79,12 +79,12 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// </summary>
         public readonly Placement Placement;
 
-        internal enum OperatorType { Unknown, Default, IterationAdvance, IterationIngress, IterationEgress };
+        internal enum OperatorType { Unknown, Default, IterationAdvance, Ingress, Egress };
         private readonly OperatorType collectionType;
 
         internal bool IsIterationAdvance { get { return collectionType == OperatorType.IterationAdvance; } }
-        internal bool IsIterationIngress { get { return collectionType == OperatorType.IterationIngress; } }
-        internal bool IsIterationEgress { get { return collectionType == OperatorType.IterationEgress; } }
+        internal bool IsIngress { get { return collectionType == OperatorType.Ingress; } }
+        internal bool IsEgress { get { return collectionType == OperatorType.Egress; } }
 
         internal abstract IEnumerable<Vertex> Vertices { get; }
 

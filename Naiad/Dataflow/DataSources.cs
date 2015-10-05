@@ -621,7 +621,7 @@ namespace Microsoft.Research.Naiad.Input
     /// </summary>
     /// <typeparam name="TRecord">record type</typeparam>
     /// <typeparam name="TTime">time type of the outer batch</typeparam>
-    public class SubBatchDataSource<TRecord, TTime> : BaseDataSource<TRecord, IterationIn<TTime>>, IObserver<IEnumerable<TRecord>>, IObserver<TRecord> where TTime : Time<TTime>
+    public class SubBatchDataSource<TRecord, TTime> : BaseDataSource<TRecord, BatchIn<TTime>>, IObserver<IEnumerable<TRecord>>, IObserver<TRecord> where TTime : Time<TTime>
     {
         private TTime outerBatch;
         private int currentSubBatch = 0;
@@ -631,12 +631,12 @@ namespace Microsoft.Research.Naiad.Input
         /// Marks the current inner batch complete
         /// </summary>
         /// <returns>the time of the completed batch    </returns>
-        public IterationIn<TTime> CompleteInnerBatch()
+        public BatchIn<TTime> CompleteInnerBatch()
         {
             if (this.inputsByWorker == null)
                 throw new InvalidOperationException("Cannot ingest data before the source has been connected.");
 
-            IterationIn<TTime> completedBatch;
+            BatchIn<TTime> completedBatch;
 
             lock (this)
             {
@@ -647,7 +647,7 @@ namespace Microsoft.Research.Naiad.Input
                     throw new ApplicationException("Must have a current valid inner batch");
                 }
 
-                IterationIn<TTime> currentTime = new IterationIn<TTime>(this.outerBatch, this.currentSubBatch);
+                BatchIn<TTime> currentTime = new BatchIn<TTime>(this.outerBatch, this.currentSubBatch);
                 for (int i = 0; i < this.inputsByWorker.Length; i++)
                 {
                     this.inputsByWorker[i].OnStreamingNotify(currentTime);
@@ -683,7 +683,7 @@ namespace Microsoft.Research.Naiad.Input
 
                 this.currentSubBatch = int.MaxValue;
 
-                IterationIn<TTime> currentTime = new IterationIn<TTime>(this.outerBatch, int.MaxValue);
+                BatchIn<TTime> currentTime = new BatchIn<TTime>(this.outerBatch, int.MaxValue);
                 for (int i = 0; i < this.inputsByWorker.Length; i++)
                 {
                     this.inputsByWorker[i].OnStreamingNotify(currentTime);
@@ -693,7 +693,7 @@ namespace Microsoft.Research.Naiad.Input
 
                 currentTime = this.inputsByWorker[0].IncrementOuter(currentTime);
                 this.outerBatch = currentTime.outerTime;
-                this.currentSubBatch = currentTime.iteration;
+                this.currentSubBatch = currentTime.batch;
             }
 
             return outerBatch;
@@ -720,7 +720,7 @@ namespace Microsoft.Research.Naiad.Input
                 this.outerBatch = outerBatch;
                 this.currentSubBatch = int.MaxValue;
 
-                IterationIn<TTime> currentTime = new IterationIn<TTime>(this.outerBatch, this.currentSubBatch);
+                BatchIn<TTime> currentTime = new BatchIn<TTime>(this.outerBatch, this.currentSubBatch);
                 for (int i = 0; i < this.inputsByWorker.Length; i++)
                 {
                     this.inputsByWorker[i].OnStreamingNotify(currentTime);
@@ -728,7 +728,7 @@ namespace Microsoft.Research.Naiad.Input
 
                 currentTime = this.inputsByWorker[0].IncrementOuter(currentTime);
                 this.outerBatch = currentTime.outerTime;
-                this.currentSubBatch = currentTime.iteration;
+                this.currentSubBatch = currentTime.batch;
             }
         }
 
@@ -748,7 +748,7 @@ namespace Microsoft.Research.Naiad.Input
                 this.outerBatch = outerBatch;
                 this.currentSubBatch = 0;
 
-                IterationIn<TTime> currentTime = new IterationIn<TTime>(this.outerBatch, this.currentSubBatch);
+                BatchIn<TTime> currentTime = new BatchIn<TTime>(this.outerBatch, this.currentSubBatch);
                 for (int i = 0; i < this.inputsByWorker.Length; i++)
                 {
                     this.inputsByWorker[i].OnStreamingNotify(currentTime);
@@ -792,7 +792,7 @@ namespace Microsoft.Research.Naiad.Input
                     throw new InvalidOperationException("Cannot add data after closing the current outer batch");
                 }
 
-                IterationIn<TTime> currentTime = new IterationIn<TTime>(this.outerBatch, this.currentSubBatch);
+                BatchIn<TTime> currentTime = new BatchIn<TTime>(this.outerBatch, this.currentSubBatch);
                 var arrayCursor = 0;
                 for (int i = 0; i < this.inputsByWorker.Length; i++)
                 {
@@ -840,7 +840,7 @@ namespace Microsoft.Research.Naiad.Input
             {
                 this.block.Wait();
 
-                IterationIn<TTime> currentTime = new IterationIn<TTime>(this.outerBatch, this.currentSubBatch);
+                BatchIn<TTime> currentTime = new BatchIn<TTime>(this.outerBatch, this.currentSubBatch);
                 var arrayCursor = 0;
                 for (int i = 0; i < this.inputsByWorker.Length; i++)
                 {
