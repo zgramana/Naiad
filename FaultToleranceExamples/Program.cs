@@ -368,7 +368,7 @@ namespace FaultToleranceExamples
 
                 public override void OnReceive1(Message<TInput1, TInner> message)
                 {
-                    Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
+                    //Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
                     TOuter outer = timeSelector(message.time);
 
                     Dictionary<TKey, List<TInput2>> currentValues;
@@ -397,7 +397,7 @@ namespace FaultToleranceExamples
 
                 public override void OnReceive2(Message<TInput2, TInner> message)
                 {
-                    Console.WriteLine(this.Stage.Name + " Receive2 " + message.time);
+                    //Console.WriteLine(this.Stage.Name + " Receive2 " + message.time);
                     TOuter outerTime = timeSelector(message.time);
 
                     int baseRecord = 0;
@@ -464,7 +464,7 @@ namespace FaultToleranceExamples
 
                 public override void OnReceive3(Message<Pair<long, long>, TInner> message)
                 {
-                    Console.WriteLine(this.Stage.Name + " receive window " + message.time + message.payload[0]);
+                    //Console.WriteLine(this.Stage.Name + " receive window " + message.time + message.payload[0]);
                     TOuter outerTime = timeSelector(message.time);
 
                     lock (this)
@@ -585,6 +585,7 @@ namespace FaultToleranceExamples
             }
 
             private Epoch slowTime;
+            private BatchIn<Epoch> fastTime;
             private bool gotSlowTime = false;
             private bool gotCCTime = false;
 
@@ -611,28 +612,39 @@ namespace FaultToleranceExamples
 
                 lock (this)
                 {
-                    if (this.gotSlowTime && ccTime.outerTime.epoch >= this.slowTime.epoch)
+                    if (this.gotSlowTime)
                     {
+                        BatchIn<Epoch> newFastTime;
+
                         if (ccTime.outerTime.epoch > this.slowTime.epoch)
                         {
-                            ccTime = new BatchIn<Epoch>(this.slowTime, int.MaxValue);
+                            newFastTime = new BatchIn<Epoch>(this.slowTime, int.MaxValue);
+                        }
+                        else
+                        {
+                            newFastTime = ccTime;
                         }
 
-                        Console.WriteLine("Setting new cc time " + ccTime);
-                        this.dataSource.StartOuterBatch(ccTime);
-
-                        if (!this.gotCCTime)
+                        if (!newFastTime.LessThan(this.fastTime))
                         {
-                            start = true;
-                            this.gotCCTime = true;
+                            this.fastTime = newFastTime;
+
+                            Console.WriteLine("Setting new fast time " + this.fastTime);
+                            this.dataSource.StartOuterBatch(this.fastTime);
+
+                            if (!this.gotCCTime)
+                            {
+                                start = true;
+                                this.gotCCTime = true;
+                            }
                         }
                     }
                 }
 
                 if (start)
                 {
-                    //var thread = new System.Threading.Thread(new System.Threading.ThreadStart(() => FeedThread()));
-                    //thread.Start();
+                    var thread = new System.Threading.Thread(new System.Threading.ThreadStart(() => FeedThread()));
+                    thread.Start();
                 }
             }
 
@@ -765,7 +777,7 @@ namespace FaultToleranceExamples
                         long ccBatchMs = -1;
                         if (record.Second.ccWindow.First >= 0)
                         {
-                            ccBatchMs = record.Second.slowWindow.Second / TimeSpan.TicksPerMillisecond;
+                            ccBatchMs = record.Second.ccWindow.Second / TimeSpan.TicksPerMillisecond;
                         }
 
                         long latency = doneMs - record.Second.startMs;
@@ -1268,11 +1280,11 @@ namespace FaultToleranceExamples
                 }
             }
 
-            long now = DateTime.Now.Ticks;
-            foreach (var ccBatch in earlier)
-            {
-                Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + ((double)(now - ccBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
-            }
+            //long now = DateTime.Now.Ticks;
+            //foreach (var ccBatch in earlier)
+            //{
+            //    Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + ((double)(now - ccBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
+            //}
         }
 
         public void AcceptSlowReduceStableTime(Pointstamp stamp)
@@ -1289,11 +1301,11 @@ namespace FaultToleranceExamples
                 }
             }
 
-            long now = DateTime.Now.Ticks;
-            foreach (var slowBatch in earlier)
-            {
-                Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + ((double)(now - slowBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
-            }
+            //long now = DateTime.Now.Ticks;
+            //foreach (var slowBatch in earlier)
+            //{
+            //    Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + ((double)(now - slowBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
+            //}
         }
 
         void HighThroughputBatchInitiator()
@@ -1441,7 +1453,7 @@ namespace FaultToleranceExamples
         static private int htInitialBatches = 100;
         static private int htSleepTime = 1000;
 #else
-#if false
+#if true
         static private int slowBase = 0;
         static private int slowRange = 1;
         static private int ccBase = 1;
@@ -1456,6 +1468,7 @@ namespace FaultToleranceExamples
         static private int ccBatchTime = 1000;
         static private int slowBatchTime = 60000;
         static private int htBatchSize = 10;
+        static private int htSleepTime = 1000;
         static private int htInitialBatches = 100;
 #else
         static private int slowBase = 0;
@@ -1505,7 +1518,7 @@ namespace FaultToleranceExamples
                 conf.CheckpointingFactory = s => new FileStreamSequence("checkpoint", s);
             }
 
-            conf.DefaultCheckpointInterval = 50000;
+            conf.DefaultCheckpointInterval = 5000;
 
             using (var computation = NewComputation.FromConfig(conf))
             {
