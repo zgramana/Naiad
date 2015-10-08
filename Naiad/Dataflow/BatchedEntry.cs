@@ -47,10 +47,10 @@ namespace Microsoft.Research.Naiad.Dataflow.BatchEntry
             return "BatchIngress";
         }
 
-        internal static Stream<R, BatchIn<T>> NewStage(Stream<R, T> input)
+        internal static Stream<R, BatchIn<T>> NewStage(Stream<R, T> input, string name)
         {
             var stage = new Stage<IngressVertex<R, T>, T>(input.ForStage.InternalComputation, Stage.OperatorType.Ingress,
-                (i, v) => new IngressVertex<R, T>(i, v), "BatchEntry.Ingress");
+                (i, v) => new IngressVertex<R, T>(i, v), name);
             stage.SetCheckpointType(CheckpointType.Stateless);
 
             stage.NewInput(input, vertex => new ActionReceiver<R, T>(vertex, m => vertex.MessageReceived(m)), input.PartitionedBy);
@@ -82,11 +82,11 @@ namespace Microsoft.Research.Naiad.Dataflow.BatchEntry
             return "BatchEgress";
         }
 
-        internal static Stream<R, T> NewStage(Stream<R, BatchIn<T>> input)
+        internal static Stream<R, T> NewStage(Stream<R, BatchIn<T>> input, string name)
         {
             var stage = new Stage<EgressVertex<R, T>, BatchIn<T>>(
                 input.ForStage.InternalComputation, Stage.OperatorType.Egress,
-                (i, v) => new EgressVertex<R, T>(i, v), "BatchEntry.Egress");
+                (i, v) => new EgressVertex<R, T>(i, v), name);
             stage.SetCheckpointType(CheckpointType.Stateless);
 
             stage.NewInput(input, vertex => new ActionReceiver<R, BatchIn<T>>(vertex, m => vertex.OnReceive(m)), input.PartitionedBy);
@@ -113,10 +113,11 @@ namespace Microsoft.Research.Naiad.Dataflow.BatchEntry
         /// </summary>
         /// <typeparam name="TRecord">record type</typeparam>
         /// <param name="stream">stream</param>
+        /// <param name="name">stream name</param>
         /// <returns>the same stream with an addition time coordinate</returns>
-        public Stream<TRecord, BatchIn<TTime>> EnterBatch<TRecord>(Stream<TRecord, TTime> stream)
+        public Stream<TRecord, BatchIn<TTime>> EnterBatch<TRecord>(Stream<TRecord, TTime> stream, string name = "EnterBatch")
         {
-            return IngressVertex<TRecord, TTime>.NewStage(stream);
+            return IngressVertex<TRecord, TTime>.NewStage(stream, name);
         }
 
         /// <summary>
@@ -124,10 +125,11 @@ namespace Microsoft.Research.Naiad.Dataflow.BatchEntry
         /// </summary>
         /// <typeparam name="TRecord">record type</typeparam>
         /// <param name="stream">the stream</param>
+        /// <param name="name">stream name</param>
         /// <returns>A stream containing records in the corresponding batch</returns>
-        public Stream<TRecord, TTime> ExitBatch<TRecord>(Stream<TRecord, BatchIn<TTime>> stream)
+        public Stream<TRecord, TTime> ExitBatch<TRecord>(Stream<TRecord, BatchIn<TTime>> stream, string name)
         {
-            return EgressVertex<TRecord, TTime>.NewStage(stream);
+            return EgressVertex<TRecord, TTime>.NewStage(stream, name);
         }
     }
 
@@ -143,15 +145,16 @@ namespace Microsoft.Research.Naiad.Dataflow.BatchEntry
         /// <typeparam name="T">time type of records after exiting</typeparam>
         /// <param name="computation">computation graph</param>
         /// <param name="entryComputation">function within the subgraph</param>
+        /// <param name="name">exit stage name</param>
         /// <returns>the function after exiting the subbatches</returns>
-        public static Stream<S, T> BatchedEntry<S, T>(this Computation computation, Func<BatchContext<T>, Stream<S, BatchIn<T>>> entryComputation)
+        public static Stream<S, T> BatchedEntry<S, T>(this Computation computation, Func<BatchContext<T>, Stream<S, BatchIn<T>>> entryComputation, string name = "ExitBatch")
             where T : Time<T>
         {
             var helper = new BatchContext<T>();
 
             var batchedOutput = entryComputation(helper);
 
-            return helper.ExitBatch(batchedOutput);
+            return helper.ExitBatch(batchedOutput, name);
         }
     }
 }

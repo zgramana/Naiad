@@ -224,7 +224,7 @@ namespace FaultToleranceExamples
                                     .SetCheckpointType(CheckpointType.CachingInput)
                                     .SetCheckpointPolicy(s => new CheckpointEagerly());
                                 return this.Reduce(input);
-                            });
+                            }, "ExitSlowBatch");
 
                     computed = this.Compute(reduced);
 
@@ -346,9 +346,10 @@ namespace FaultToleranceExamples
                 where TInner : Time<TInner>
                 where TOuter : Time<TOuter>
             {
-                private readonly Dictionary<TOuter, Dictionary<TKey, List<TInput2>>> values = new Dictionary<TOuter,Dictionary<TKey,List<TInput2>>>();
+                private readonly Dictionary<TOuter, Dictionary<TKey, List<TInput2>>> partialValues = new Dictionary<TOuter, Dictionary<TKey, List<TInput2>>>();
+                private readonly Dictionary<TOuter, Dictionary<TKey, List<TInput2>>> values = new Dictionary<TOuter, Dictionary<TKey, List<TInput2>>>();
                 private readonly Dictionary<TOuter, Pair<long, long>> windows = new Dictionary<TOuter, Pair<long, long>>();
-                private readonly HashSet<TOuter> gotValues = new HashSet<TOuter>();
+                private readonly HashSet<TOuter> announcedTimes = new HashSet<TOuter>();
 
                 private readonly Func<TInput1, TKey> keySelector1;
                 private readonly Func<TInput2, TKey> keySelector2;
@@ -397,43 +398,56 @@ namespace FaultToleranceExamples
 
                 public override void OnReceive2(Message<TInput2, TInner> message)
                 {
-                    //Console.WriteLine(this.Stage.Name + " Receive2 " + message.time);
+                    Console.WriteLine(this.Stage.Name + " Receive2 " + message.time);
                     TOuter outerTime = timeSelector(message.time);
 
                     int baseRecord = 0;
 
                     Dictionary<TKey, List<TInput2>> currentValues;
 
+                    bool shouldAnnounce;
+
                     lock (this)
                     {
                         if (message.payload[0].EntryTicks == -1)
                         {
                             ++baseRecord;
-                            if (this.values.ContainsKey(outerTime))
+                            if (this.partialValues.ContainsKey(outerTime))
                             {
-                                throw new ApplicationException("Duplicate times");
+                                Console.WriteLine(this.Stage.Name + " Replacing partial values for " + outerTime);
                             }
-                            else
-                            {
-                                this.values.Add(outerTime, new Dictionary<TKey, List<TInput2>>());
-                            }
+                            this.partialValues[outerTime] = new Dictionary<TKey, List<TInput2>>();
+                        }
+                        else if (!this.partialValues.ContainsKey(outerTime))
+                        {
+                            throw new ApplicationException(this.Stage.Name + " not accumulating partial values for " + outerTime);
                         }
 
-                        currentValues = this.values[outerTime];
+                        currentValues = this.partialValues[outerTime];
+
+                        shouldAnnounce = this.windows.ContainsKey(outerTime) && !this.announcedTimes.Contains(outerTime);
                     }
 
                     for (int i = baseRecord; i < message.length; i++)
                     {
                         if (message.payload[i].EntryTicks == -2)
                         {
-                            if (this.gotValues.Contains(outerTime))
+                            lock (this)
                             {
-                                this.gotValues.Remove(outerTime);
-                                this.filledAction(outerTime);
+                                if (this.values.ContainsKey(outerTime))
+                                {
+                                    Console.WriteLine(this.Stage.Name + " replacing values for " + outerTime);
+                                }
+                                this.values[outerTime] = this.partialValues[outerTime];
+                                this.partialValues.Remove(outerTime);
+                                if (shouldAnnounce)
+                                {
+                                    this.announcedTimes.Add(outerTime);
+                                }
                             }
-                            else
+                            if (shouldAnnounce)
                             {
-                                this.gotValues.Add(outerTime);
+                                this.filledAction(outerTime);
                             }
 
                             Console.WriteLine(this.Stage.Name + " R2 " + outerTime + ": " + currentValues.Select(k => k.Value.Count).Sum());
@@ -467,19 +481,25 @@ namespace FaultToleranceExamples
                     //Console.WriteLine(this.Stage.Name + " receive window " + message.time + message.payload[0]);
                     TOuter outerTime = timeSelector(message.time);
 
+                    bool shouldAnnounce;
+
                     lock (this)
                     {
+                        if (this.windows.ContainsKey(outerTime))
+                        {
+                            Console.WriteLine(this.Stage.Name + " replacing window for " + outerTime);
+                        }
                         this.windows[outerTime] = message.payload[0];
+                        shouldAnnounce = this.values.ContainsKey(outerTime) && !this.announcedTimes.Contains(outerTime);
+                        if (shouldAnnounce)
+                        {
+                            this.announcedTimes.Add(outerTime);
+                        }
                     }
 
-                    if (this.gotValues.Contains(outerTime))
+                    if (shouldAnnounce)
                     {
-                        this.gotValues.Remove(outerTime);
                         this.filledAction(outerTime);
-                    }
-                    else
-                    {
-                        this.gotValues.Add(outerTime);
                     }
                 }
 
@@ -498,6 +518,15 @@ namespace FaultToleranceExamples
                                 this.values.Remove(time);
                             }
                         }
+                        foreach (var time in this.partialValues.Keys)
+                        {
+                            Pointstamp stamp = time.ToPointstamp(0);
+
+                            if (!stamp.Equals(outerStamp) && FTFrontier.IsLessThanOrEqualTo(stamp, outerStamp))
+                            {
+                                throw new ApplicationException(this.Stage.Name + " Leftover partial values for " + time);
+                            }
+                        }
                         foreach (var time in this.windows.Keys.ToArray())
                         {
                             Pointstamp stamp = time.ToPointstamp(0);
@@ -506,6 +535,16 @@ namespace FaultToleranceExamples
                             {
                                 Console.WriteLine("Removing window " + time);
                                 this.windows.Remove(time);
+                            }
+                        }
+                        foreach (var time in this.announcedTimes.ToArray())
+                        {
+                            Pointstamp stamp = time.ToPointstamp(0);
+
+                            if (!stamp.Equals(outerStamp) && FTFrontier.IsLessThanOrEqualTo(stamp, outerStamp))
+                            {
+                                Console.WriteLine("Removing announced " + time);
+                                this.announcedTimes.Remove(time);
                             }
                         }
                     }
@@ -861,7 +900,7 @@ namespace FaultToleranceExamples
                     Stream<Record, BatchIn<BatchIn<Epoch>>> input;
                     using (var sender = computation.WithPlacement(senderPlacement))
                     {
-                        input = computation.NewInput(dataSource).SetCheckpointType(CheckpointType.CachingInput);
+                        input = computation.NewInput(dataSource, "FastInput").SetCheckpointType(CheckpointType.CachingInput);
                     }
 
                     var slow = this.PrepareForFast(slowOutput, r => r.key);
@@ -877,8 +916,8 @@ namespace FaultToleranceExamples
                         {
                             var firstJoin = input.SetCheckpointPolicy(i => new CheckpointWithoutPersistence())
                                 .StaggeredJoin(
-                                    ic.EnterBatch(slow).SetCheckpointPolicy(i => new CheckpointWithoutPersistence()),
-                                    ic.EnterBatch(slowWindow).SetCheckpointPolicy(i => new CheckpointWithoutPersistence()),
+                                    ic.EnterBatch(slow, "SlowDataBatchEntry").SetCheckpointPolicy(i => new CheckpointWithoutPersistence()),
+                                    ic.EnterBatch(slowWindow, "SlowWindowBatchEntry").SetCheckpointPolicy(i => new CheckpointWithoutPersistence()),
                                     i => i.slowJoinKey, s => s.key, (i, s, w) => { i.slowWindow = w; return i; },
                                     t => t.outerTime.outerTime, this.AcceptSlowTime, "SlowJoin");
 
@@ -886,15 +925,15 @@ namespace FaultToleranceExamples
 
                             var secondJoin = firstJoin.First
                                 .StaggeredJoin(
-                                    ic.EnterBatch(cc).SetCheckpointPolicy(s => new CheckpointWithoutPersistence()),
-                                    ic.EnterBatch(ccWindow).SetCheckpointPolicy(s => new CheckpointWithoutPersistence()),
+                                    ic.EnterBatch(cc, "CCDataBatchEntry").SetCheckpointPolicy(s => new CheckpointWithoutPersistence()),
+                                    ic.EnterBatch(ccWindow, "CCWindowBatchEntry").SetCheckpointPolicy(s => new CheckpointWithoutPersistence()),
                                     i => i.ccJoinKey, c => c.key, (i, c, w) => { i.ccWindow = w; return i; },
                                     t => t.outerTime, this.AcceptCCTime, "CCJoin");
 
                             this.ccVertices = secondJoin.Second;
 
                             return secondJoin.First.Compose(computation, senderPlacement, i => this.Exit(i, placement.Count));
-                        }).SetCheckpointPolicy(s => new CheckpointWithoutPersistence());
+                        }, "FastPipeLineExitBatch").SetCheckpointPolicy(s => new CheckpointWithoutPersistence());
                 }
 
                 if (Enumerable.Range(this.baseProc, this.range).Contains(computation.Controller.Configuration.ProcessID))
@@ -1008,47 +1047,61 @@ namespace FaultToleranceExamples
                 Placement ccPlacement =
                     new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
                         Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
+                Placement slowPlacement =
+                    new Placement.ProcessRange(Enumerable.Range(slow.baseProc, slow.range),
+                        Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
 
                 var slowOutput = slow.Make(computation);
 
                 Stream<Pair<long, long>, BatchIn<Epoch>> ccWindow;
 
-                var forCC = computation.BatchedEntry<Record, Epoch>(c =>
-                    {
-                        Collection<Record, BatchIn<Epoch>> cc;
-
-                        using (var p = computation.WithPlacement(ccPlacement))
+                //using (var p = computation.WithPlacement(ccPlacement))
+                {
+                    var forCC = computation.BatchedEntry<Record, Epoch>(c =>
                         {
-                            var reduced = computation
-                                .BatchedEntry<Record, BatchIn<Epoch>>(ic =>
+                            Collection<Record, BatchIn<Epoch>> cc;
+
+                            using (var p = computation.WithPlacement(ccPlacement))
+                            {
+                                var reduced = computation
+                                    .BatchedEntry<Record, BatchIn<Epoch>>(ic =>
+                                        {
+                                            var input = this.MakeInput(computation, inputPlacement, this.source);
+                                            return this.Reduce(input);
+                                        }, "CCPipeLineExitInnerBatch");
+
+                                var asCollection = reduced.Select(r =>
                                     {
-                                        var input = this.MakeInput(computation, inputPlacement, this.source);
-                                        return this.Reduce(input);
-                                    });
+                                        if (r.EntryTicks < 0)
+                                        {
+                                            r.EntryTicks = -r.EntryTicks;
+                                            return new Weighted<Record>(r, -1);
+                                        }
+                                        else
+                                        {
+                                            return new Weighted<Record>(r, 1);
+                                        }
+                                    }).AsCollection(false);
 
-                            var asCollection = reduced.Select(r =>
-                                {
-                                    if (r.EntryTicks < 0)
-                                    {
-                                        r.EntryTicks = -r.EntryTicks;
-                                        return new Weighted<Record>(r, -1);
-                                    }
-                                    else
-                                    {
-                                        return new Weighted<Record>(r, 1);
-                                    }
-                                }).AsCollection(false);
+                                cc = this.Compute(asCollection);
 
-                            cc = this.Compute(asCollection);
-                            
-                            ccWindow = this.TimeWindow(reduced, ccPlacement.Count);
-                        }
+                                ccWindow = this.TimeWindow(reduced, ccPlacement.Count);
+                            }
+                            Stream<SlowPipeline.Record, BatchIn<Epoch>> slowData;
+                            Stream<Pair<long, long>, BatchIn<Epoch>> slowWindow;
 
-                        //buggy.Make(computation, c.EnterLoop(slowOutput.Output).AsCollection(false), cc);
-                        perfect.Make(computation, c.EnterBatch(slowOutput.First), c.EnterBatch(slowOutput.Second), cc, ccWindow);
+                            using (var pp = computation.WithPlacement(slowPlacement))
+                            {
+                                slowData = c.EnterBatch(slowOutput.First);
+                                slowWindow = c.EnterBatch(slowOutput.Second);
+                            }
 
-                        return cc;
-                    });
+                            //buggy.Make(computation, c.EnterLoop(slowOutput.Output).AsCollection(false), cc);
+                            perfect.Make(computation, slowData, slowWindow, cc, ccWindow);
+
+                            return cc;
+                        }, "CCPipeLineExitOuterBatch");
+                }
             }
 
             public CCPipeline(int baseProc, int range)
@@ -1576,8 +1629,8 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
-                        System.Threading.Thread.Sleep(Timeout.Infinite);
-                        System.Threading.Thread.Sleep(60000);
+                        //System.Threading.Thread.Sleep(Timeout.Infinite);
+                        System.Threading.Thread.Sleep(10000);
                         if (conf.Processes > 2)
                         {
                             manager.FailProcess(1);

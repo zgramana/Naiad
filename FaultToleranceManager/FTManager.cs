@@ -102,6 +102,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         private void RemoveStageFrontier(int stage, FTFrontier frontier)
         {
             var stageDictionary = this.stageFrontiers[stage];
+            if (!stageDictionary.ContainsKey(frontier))
+            {
+                throw new ApplicationException("Looking up bad frontier " + stage + "." + frontier);
+            }
             int count = stageDictionary[frontier];
             if (count == 1)
             {
@@ -143,16 +147,23 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             while (true)
             {
                 Thread.Sleep(1000);
-                lock (this)
+                this.FlushLog();
+            }
+        }
+
+        public void FlushLog()
+        {
+            lock (this)
+            {
+                if (this.checkpointLog != null)
                 {
-                    if (this.checkpointLog != null)
-                    {
-                        this.checkpointLog.Flush();
-                        this.checkpointLogFile.Flush(true);
-                    }
+                    this.checkpointLog.Flush();
+                    this.checkpointLogFile.Flush(true);
                 }
             }
         }
+
+        public readonly bool debugLog = false;
 
         public void WriteLog(string entry)
         {
@@ -217,7 +228,6 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             {
                 this.stages[stage.StageId] = stage;
                 this.stageFrontiers.Add(stage.StageId, new SortedDictionary<FTFrontier, int>());
-                this.AddStageFrontier(stage.StageId, new FTFrontier(false));
             }
 
             foreach (Pair<Pair<int, int>, int> ftVertex in args.ftmanager)
@@ -226,6 +236,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 SV node = new SV { StageId = stage.StageId, VertexId = ftVertex.First.Second };
                 NodeState state = new NodeState(!CheckpointProperties.IsStateful(stage.CheckpointType), ftVertex.Second);
                 this.nodeState.Add(node, state);
+                this.AddStageFrontier(stage.StageId, new FTFrontier(false));
             }
 
             foreach (Pair<SV, SV[]> edgeList in args.edges
@@ -343,6 +354,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 state.checkpoints.Remove(oldFrontier);
                 state.checkpoints.Add(update.frontier);
+                if (this.debugLog)
+                {
+                    this.WriteLog(node.StageId + "." + node.VertexId + " " + oldFrontier + "->" + update.frontier + " AC");
+                }
 
                 checkpointChanges = checkpointChanges.Concat(new Weighted<Checkpoint>[]
                     {
@@ -365,6 +380,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
 
                     state.checkpoints.Add(update.frontier);
+                    if (this.debugLog)
+                    {
+                        this.WriteLog(node.StageId + "." + node.VertexId + " " + update.frontier + " AC");
+                    }
                 }
 
                 checkpointChanges = checkpointChanges.Concat(new Weighted<Checkpoint>[]
@@ -395,7 +414,15 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     {
                         throw new ApplicationException("Stale Delivered message");
                     }
-                    state.deliveredMessages.Add(time.Key.time, time.Select(m => m.edge.src.StageId).ToArray());
+                    var srcs = time.Select(m => m.edge.src.StageId).ToArray();
+                    state.deliveredMessages.Add(time.Key.time, srcs);
+                    if (this.debugLog)
+                    {
+                        foreach (var src in srcs)
+                        {
+                            this.WriteLog(node.StageId + "." + node.VertexId + " " + src + "->" + time.Key.time + " AM");
+                        }
+                    }
                 }
             }
             deliveredMessageChanges = deliveredMessageChanges
@@ -410,6 +437,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         throw new ApplicationException("Stale Delivered notification");
                     }
                     state.deliveredNotifications.Add(time);
+                    if (this.debugLog)
+                    {
+                        this.WriteLog(node.StageId + "." + node.VertexId + " " + time.Timestamp + " AN");
+                    }
                 }
             }
             notificationChanges = notificationChanges
@@ -447,11 +478,17 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         throw new ApplicationException("Stale Discarded message");
                     }
 
-                    state.discardedMessages.Add(
-                        srcGroup.Key,
-                        srcGroup.SelectMany(srcTime => srcTime.Second.Second
-                            .Select(dstTime => srcTime.Second.First.PairWith(dstTime)))
-                            .ToArray());
+                    var dsts = srcGroup.SelectMany(srcTime => srcTime.Second.Second
+                        .Select(dstTime => srcTime.Second.First.PairWith(dstTime)))
+                        .ToArray();
+                    state.discardedMessages.Add(srcGroup.Key, dsts);
+                    if (this.debugLog)
+                    {
+                        foreach (var dst in dsts)
+                        {
+                            this.WriteLog(node.StageId + "." + node.VertexId + " " + srcGroup.Key + "->" + dst.First + "." + dst.Second.Timestamp + " AD");
+                        }
+                    }
                 }
             }
             discardedMessageChanges = discardedMessageChanges.
@@ -461,7 +498,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         }
 
         private void InjectChangesFromComputedUpdate(
-            SV node, FTFrontier newFrontier, bool isLowWatermark,
+            SV node, FTFrontier oldFrontier, FTFrontier newFrontier, bool isLowWatermark,
             ref IEnumerable<Weighted<Checkpoint>> checkpointChanges,
             ref IEnumerable<Weighted<Notification>> notificationChanges,
             ref IEnumerable<Weighted<DeliveredMessage>> deliveredMessageChanges,
@@ -483,6 +520,14 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     {
                         throw new ApplicationException("Multiple downward-closed checkpoints");
                     }
+                    if (state.checkpoints.Count != 1)
+                    {
+                        throw new ApplicationException("No downward-closed checkpoint");
+                    }
+                    if (this.debugLog)
+                    {
+                        this.WriteLog(node.StageId + "." + node.VertexId + " " + state.checkpoints.Single() + "-" + newFrontier + " LWM");
+                    }
                 }
                 else
                 {
@@ -495,6 +540,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                         state.checkpoints.Remove(thisCheckpoints[0]);
                         state.checkpoints.Add(newFrontier);
+                        if (this.debugLog)
+                        {
+                            this.WriteLog(node.StageId + "." + node.VertexId + " " + thisCheckpoints[0] + "->" + newFrontier + " RC");
+                        }
 
                         checkpointChanges = checkpointChanges
                             .Concat(new Weighted<Checkpoint>[] {
@@ -514,6 +563,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 foreach (var c in thisCheckpoints)
                 {
                     state.checkpoints.Remove(c);
+                    if (this.debugLog)
+                    {
+                        this.WriteLog(node.StageId + "." + node.VertexId + " " + c + " RC");
+                    }
                 }
             }
 
@@ -527,6 +580,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             foreach (var n in thisNotifications)
             {
                 state.deliveredNotifications.Remove(n);
+                if (this.debugLog)
+                {
+                    this.WriteLog(node.StageId + "." + node.VertexId + " " + n.Timestamp + " RN");
+                }
             }
 
             var thisDeliveredMessages = state.deliveredMessages
@@ -543,16 +600,22 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             }, -1))));
             foreach (var m in thisDeliveredMessages)
             {
+                if (this.debugLog)
+                {
+                    foreach (var i in state.deliveredMessages[m.Key])
+                    {
+                        this.WriteLog(node.StageId + "." + node.VertexId + " " + i + "->" + m.Key + " RM");
+                    }
+                }
                 state.deliveredMessages.Remove(m.Key);
             }
 
             if (isLowWatermark)
             {
-                FTFrontier oldStageFrontier = this.StageFrontier(node.StageId);
-                this.RemoveStageFrontier(node.StageId, oldStageFrontier);
+                this.RemoveStageFrontier(node.StageId, oldFrontier);
                 this.AddStageFrontier(node.StageId, newFrontier);
                 FTFrontier newStageFrontier = this.StageFrontier(node.StageId);
-                if (!oldStageFrontier.Equals(newStageFrontier))
+                if (!oldFrontier.Equals(newStageFrontier))
                 {
                     newStageFrontiers.Add(node.StageId);
 
@@ -588,6 +651,18 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                 .Where(dst => !dst.First.Equals(node.StageId) || !newStageFrontier.Contains(dst.Second))
                                 .ToArray();
 
+                            if (this.debugLog)
+                            {
+                                if (staleSrcTime.Value.Length + newSrcMessages.Length != upstreamState.discardedMessages[staleSrcTime.Key].Count())
+                                {
+                                    throw new ApplicationException("wrong discarded messages " + staleSrcTime.Value.Length + "," + newSrcMessages.Length + "," +
+                                        upstreamState.discardedMessages[staleSrcTime.Key].Count());
+                                }
+                                foreach (var m in upstreamState.discardedMessages[staleSrcTime.Key].Except(newSrcMessages))
+                                {
+                                    this.WriteLog(upstream.StageId + "." + upstream.VertexId + " " + m.Second.Timestamp + "->" + m.First + " RD");
+                                }
+                            }
                             if (newSrcMessages.Length == 0)
                             {
                                 upstreamState.discardedMessages.Remove(staleSrcTime.Key);
@@ -619,6 +694,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                 }, -1))));
                 foreach (var m in thisDiscardedMessages)
                 {
+                    if (this.debugLog)
+                    {
+                        foreach (var mm in state.discardedMessages[m.Key])
+                        {
+                            this.WriteLog(node.StageId + "." + node.VertexId + " " + mm.Second.Timestamp + "->" + mm.First + " RD");
+                        }
+                    }
                     state.discardedMessages.Remove(m.Key);
                 }
             }
@@ -662,7 +744,17 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                           (updates.Length == 1 &&
                            updates[0].weight == 1 && updates[0].record.frontier.Empty && state.currentRestoration.Empty)))
                     {
+                        Console.WriteLine(updates.Length + " updates for " + state.currentRestoration);
+                        foreach (var update in updates)
+                        {
+                            Console.WriteLine(update.weight + ": " + update.record.node.StageId + "." + update.record.node.VertexId + " " + update.record.frontier);
+                        }
+                        this.FlushLog();
                         throw new ApplicationException("Bad incremental logic");
+                    }
+                    if (this.debugLog)
+                    {
+                        this.WriteLog(node.StageId + "." + node.VertexId + " " + state.currentRestoration + "->" + updates.Last().record.frontier);
                     }
                     state.currentRestoration = updates.Last().record.frontier;
                 }
@@ -700,7 +792,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     });
             }
 
-            this.InjectChangesFromComputedUpdate(node, state.currentRestoration, true,
+            this.InjectChangesFromComputedUpdate(node, oldRestoration, state.currentRestoration, true,
                 ref checkpointChanges, ref notificationChanges, ref deliveredMessageChanges, ref discardedMessageChanges, newStageUpdates);
 
             return true;
@@ -729,6 +821,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             bool didAnything = false;
 
+            this.WriteLog("INJECTING");
+
             foreach (CheckpointUpdate update in updates)
             {
                 this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + (update.isTemporary ? "TA" : "UA"));
@@ -739,6 +833,19 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             if (changes != null)
             {
+                this.WriteLog("ADDING CHANGES");
+                if (this.debugLog)
+                {
+                    foreach (IGrouping<SV, Weighted<Frontier>> u in changes.GroupBy(c => c.record.node).OrderBy(s => (s.Key.StageId << 16) + s.Key.VertexId))
+                    {
+                        StringBuilder sb = new StringBuilder(u.Key.StageId + "." + u.Key.VertexId);
+                        foreach (var f in u)
+                        {
+                            sb.Append(" " + f.weight + " " + (f.record.isNotification ? "N" : "F") + f.record.frontier);
+                        }
+                        this.WriteLog(sb.ToString());
+                    }
+                }
                 foreach (IGrouping<SV, Weighted<Frontier>> computedUpdate in changes.GroupBy(c => c.record.node))
                 {
                     didAnything = this.AddChangesFromComputedUpdate(computedUpdate,
@@ -746,6 +853,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         gcUpdates, newStageUpdates)
                         || didAnything;
                 }
+                this.WriteLog("DONE ADDING CHANGES");
             }
 
             if (didAnything)
@@ -806,7 +914,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             {
                 if (!rollback.Value.frontier.Complete)
                 {
-                    this.InjectChangesFromComputedUpdate(rollback.Key, rollback.Value.frontier, false,
+                    this.InjectChangesFromComputedUpdate(rollback.Key, new FTFrontier(false), rollback.Value.frontier, false,
                         ref checkpointChanges, ref notificationChanges, ref deliveredMessageChanges, ref discardedMessageChanges, null);
                 }
             }
@@ -872,6 +980,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             // fill in the low watermark for everyone first
             foreach (var state in this.nodeState)
             {
+                if (this.debugLog)
+                {
+                    this.WriteLog(state.Key.StageId + "." + state.Key.VertexId + " " + state.Value.currentRestoration + " LW");
+                }
                 this.rollbackFrontiers.Add(state.Key, new CheckpointLowWatermark
                     {
                         stageId = state.Key.StageId,
@@ -898,6 +1010,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                     current.frontier = change.record.frontier;
                     this.rollbackFrontiers[change.record.node] = current;
+                    if (this.debugLog)
+                    {
+                        this.WriteLog(change.record.node.StageId + "." + change.record.node.VertexId + " " + current.frontier + " RB");
+                    }
                 }
                 else if (change.weight == -1)
                 {

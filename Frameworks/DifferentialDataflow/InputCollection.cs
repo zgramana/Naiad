@@ -110,8 +110,10 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
         /// <typeparam name="T">time type of records after exiting</typeparam>
         /// <param name="computation">computation graph</param>
         /// <param name="entryComputation">function within the subgraph</param>
+        /// <param name="name">exit stage name</param>
         /// <returns>the function after exiting the subbatches</returns>
-        public static Collection<S, T> BatchedEntry<S, T>(this Computation computation, Func<Dataflow.BatchEntry.BatchContext<T>, Collection<S, BatchIn<T>>> entryComputation)
+        public static Collection<S, T> BatchedEntry<S, T>(this Computation computation, Func<Dataflow.BatchEntry.BatchContext<T>, Collection<S, BatchIn<T>>> entryComputation,
+            string name)
             where S : IEquatable<S>
             where T : Time<T>
         {
@@ -119,7 +121,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
 
             var batchedOutput = entryComputation(helper);
 
-            return helper.ExitBatch(batchedOutput.Output).ToCollection();
+            return helper.ExitBatch(batchedOutput.Output, name).ToCollection();
         }
     }
 
