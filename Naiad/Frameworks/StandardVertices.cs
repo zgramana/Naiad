@@ -658,18 +658,18 @@ namespace Microsoft.Research.Naiad.Dataflow.StandardVertices
         public abstract void OnReceive3(Message<TInput3, TTime> message);
 
         /// <summary>
-        /// Creates a new stream from the output of a stage of BinaryVertex objects.
+        /// Creates a new stream from the output of a stage of TernaryVertex objects.
         /// </summary>
         /// <param name="stream1">first input stream</param>
         /// <param name="stream2">second input stream</param>
         /// <param name="stream3">third input stream</param>
-        /// <param name="factory">factory from index and stage to BinaryVertex</param>
+        /// <param name="factory">factory from index and stage to TernaryVertex</param>
         /// <param name="input1PartitionBy">first input partitioning requirement</param>
         /// <param name="input2PartitionBy">second input partitioning requirement</param>
         /// <param name="input3PartitionBy">third input partitioning requirement</param>
         /// <param name="outputPartitionBy">output partitioning guarantee</param>
         /// <param name="name">friendly name</param>
-        /// <returns>the output stream of the corresponding binary stage.</returns>
+        /// <returns>the output stream of the corresponding ternary stage.</returns>
         public static Stream<TOutput, TTime> MakeStage(Stream<TInput1, TTime> stream1, Stream<TInput2, TTime> stream2, Stream<TInput3, TTime> stream3,
             Func<int, Stage<TTime>, TernaryVertex<TInput1, TInput2, TInput3, TOutput, TTime>> factory,
             Expression<Func<TInput1, int>> input1PartitionBy, Expression<Func<TInput2, int>> input2PartitionBy, Expression<Func<TInput3, int>> input3PartitionBy,
@@ -687,19 +687,19 @@ namespace Microsoft.Research.Naiad.Dataflow.StandardVertices
         }
 
         /// <summary>
-        /// Creates a new stream from the output of a stage of BinaryVertex objects.
+        /// Creates a new stream from the output of a stage of TernaryVertex objects.
         /// </summary>
         /// <param name="placement">Placement to use for vertices in the stage</param>
         /// <param name="stream1">first input stream</param>
         /// <param name="stream2">second input stream</param>
         /// <param name="stream3">third input stream</param>
-        /// <param name="factory">factory from index and stage to BinaryVertex</param>
+        /// <param name="factory">factory from index and stage to TernaryVertex</param>
         /// <param name="input1PartitionBy">first input partitioning requirement</param>
         /// <param name="input2PartitionBy">second input partitioning requirement</param>
         /// <param name="input3PartitionBy">third input partitioning requirement</param>
         /// <param name="outputPartitionBy">output partitioning guarantee</param>
         /// <param name="name">friendly name</param>
-        /// <returns>the output stream of the corresponding binary stage.</returns>
+        /// <returns>the output stream of the corresponding ternary stage.</returns>
         public static Stream<TOutput, TTime> MakeStage(Placement placement,
             Stream<TInput1, TTime> stream1, Stream<TInput2, TTime> stream2, Stream<TInput3, TTime> stream3,
             Func<int, Stage<TTime>, TernaryVertex<TInput1, TInput2, TInput3, TOutput, TTime>> factory,

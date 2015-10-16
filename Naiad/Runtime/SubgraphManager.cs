@@ -897,6 +897,8 @@ namespace Microsoft.Research.Naiad
 
             this.MaterializeAll(true);
 
+            this.ShowTopology();
+
             this.Controller.DoStartupBarrier();
 
             this.currentState = InternalComputationState.Active;
@@ -907,6 +909,26 @@ namespace Microsoft.Research.Naiad
                 streamingInput.Activate();
 
             this.NotifyOnStartup();
+        }
+
+        private void ShowTopology()
+        {
+            foreach (var stage in this.stages.Values.OrderBy(s => s.StageId))
+            {
+                Console.WriteLine(stage.ToString());
+                StringBuilder inEdge = new StringBuilder("<<");
+                foreach (var source in stage.Sources.Select(e => e.SourceStage).OrderBy(s => s.StageId))
+                {
+                    inEdge.Append(" " + source.ToString());
+                }
+                Console.WriteLine(inEdge);
+                StringBuilder outEdge = new StringBuilder(">>");
+                foreach (var dst in stage.Targets.Select(e => e.TargetStage).OrderBy(s => s.StageId))
+                {
+                    outEdge.Append(" " + dst.ToString());
+                }
+                Console.WriteLine(outEdge);
+            }
         }
 
         private IEnumerable<Pair<Pair<int,int>,Pair<int,int>>> EdgeTopology()
