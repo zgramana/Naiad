@@ -361,7 +361,7 @@ namespace FaultToleranceExamples
 
                 public void OnReceive1(Message<TInput1, TInner> message)
                 {
-                    //Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
+                    Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
                     TOuter outer = timeSelector(message.time);
 
                     Dictionary<TKey, List<TInput2>> currentValues = this.values[outer];
@@ -378,6 +378,10 @@ namespace FaultToleranceExamples
                         {
                             foreach (var match in currentEntry)
                                 output.Send(resultSelector(message.payload[i], match, window));
+                        }
+                        else
+                        {
+                            Console.WriteLine(this.Stage.Name + " no matches for " + key);
                         }
                     }
                 }
@@ -626,9 +630,9 @@ namespace FaultToleranceExamples
                 }
             }
 
-            private Epoch? slowDataReady;
+            private HashSet<Epoch> slowDataReady = new HashSet<Epoch>();
             private Epoch? slowDataStable;
-            private BatchIn<Epoch>? ccDataReady;
+            private HashSet<BatchIn<Epoch>> ccDataReady = new HashSet<BatchIn<Epoch>>();
             private BatchIn<Epoch>? ccDataStable;
             private BatchIn<Epoch>? fastTime;
 
@@ -636,8 +640,8 @@ namespace FaultToleranceExamples
             {
                 lock (this)
                 {
+                    this.slowDataReady.Add(slowTime);
                     Console.WriteLine("Fast got slow data " + slowTime);
-                    this.slowDataReady = slowTime;
                 }
 
                 this.ConsiderFastBatches();
@@ -647,8 +651,11 @@ namespace FaultToleranceExamples
             {
                 lock (this)
                 {
-                    Console.WriteLine("Fast got slow stable " + slowTime);
-                    this.slowDataStable = slowTime;
+                    if (!this.slowDataStable.HasValue || !slowTime.LessThan(this.slowDataStable.Value))
+                    {
+                        Console.WriteLine("Fast got slow stable " + slowTime);
+                        this.slowDataStable = slowTime;
+                    }
                 }
 
                 this.ConsiderFastBatches();
@@ -665,7 +672,7 @@ namespace FaultToleranceExamples
 
                 lock (this)
                 {
-                    this.ccDataReady = ccTime;
+                    this.ccDataReady.Add(ccTime);
                 }
 
                 this.ConsiderFastBatches();
@@ -677,7 +684,10 @@ namespace FaultToleranceExamples
 
                 lock (this)
                 {
-                    this.ccDataStable = ccTime;
+                    if (!this.ccDataStable.HasValue || !ccTime.LessThan(this.ccDataStable.Value))
+                    {
+                        this.ccDataStable = ccTime;
+                    }
                 }
 
                 this.ConsiderFastBatches();
@@ -689,11 +699,30 @@ namespace FaultToleranceExamples
 
                 lock (this)
                 {
-                    if (this.slowDataReady.HasValue && this.slowDataStable.HasValue &&
-                        this.ccDataReady.HasValue && this.ccDataStable.HasValue)
+                    if (this.slowDataStable.HasValue && this.ccDataStable.HasValue)
                     {
-                        Epoch slowTime = this.slowDataReady.Value.Meet(this.slowDataStable.Value);
-                        BatchIn<Epoch> ccTime = this.ccDataReady.Value.Meet(this.ccDataStable.Value);
+                        var goodSlowData = this.slowDataReady.Where(x => x.LessThan(this.slowDataStable.Value)).ToArray();
+                        if (goodSlowData.Length == 0)
+                        {
+                            return;
+                        }
+                        var goodCCData = this.ccDataReady.Where(x => x.LessThan(this.ccDataStable.Value)).ToArray();
+                        if (goodCCData.Length == 0)
+                        {
+                            return;
+                        }
+
+                        Epoch slowTime = goodSlowData.Max();
+                        foreach (var t in goodSlowData)
+                        {
+                            this.slowDataReady.Remove(t);
+                        }
+
+                        BatchIn<Epoch> ccTime = goodCCData.Max();
+                        foreach (var t in goodCCData)
+                        {
+                            this.ccDataReady.Remove(t);
+                        }
 
                         BatchIn<Epoch> newFastTime;
 
@@ -761,10 +790,9 @@ namespace FaultToleranceExamples
             {
                 while (true)
                 {
-                    Console.WriteLine("Sending fast batch");
+                    Console.WriteLine("Sending fast batch " + this.dataSource.NextTime());
 
                     this.dataSource.OnNext(this.MakeBatch(Program.fastBatchSize));
-                    this.dataSource.CompleteInnerBatch();
 
                     Thread.Sleep(Program.fastSleepTime);
                 }
@@ -801,6 +829,7 @@ namespace FaultToleranceExamples
                     {
                         buffer = new List<Record>();
                         this.bufferedOutputs.Add(message.time, buffer);
+                        Console.WriteLine("Holding records for " + message.time);
                     }
                     for (int i = 0; i < message.length; ++i)
                     {
@@ -908,9 +937,13 @@ namespace FaultToleranceExamples
                                 // do the computation using the pipeline placement
                                 using (var computeProcs = computation.WithPlacement(placement))
                                 {
-                                    var slowInternal = ic.EnterBatch(slow, "SlowDataEntry").Prepend().SetCheckpointType(CheckpointType.StatelessLogAll);
-                                    var slowWindowInternal = ic.EnterBatch(slowWindow, "SlowWindowEntry").SetCheckpointType(CheckpointType.StatelessLogAll);
-                                    var slowDone = slowInternal.SelectMany(r => new bool[0]).Concat(slowWindowInternal.SelectMany(r => new bool[0]));
+                                    var slowInternal = ic.EnterBatch(slow, "SlowDataEntry").Prepend()
+                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
+                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
+                                    var slowWindowInternal = ic.EnterBatch(slowWindow, "SlowWindowEntry")
+                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
+                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
+                                    var slowDone = slowInternal.Select(r => true).Concat(slowWindowInternal.Select(r => true));
                                     this.slowStage = slowDone.ForStage.StageId;
 
                                     var firstJoin = queries.SetCheckpointPolicy(i => new CheckpointWithoutPersistence())
@@ -921,9 +954,13 @@ namespace FaultToleranceExamples
                                             t => t.outerTime.outerTime, t => new BatchIn<BatchIn<Epoch>>(new BatchIn<Epoch>(t, Int32.MaxValue-1), Int32.MaxValue-1),
                                             "SlowJoin");
 
-                                    var ccInternal = ic.EnterBatch(cc, "CCDataEntry").Prepend().SetCheckpointType(CheckpointType.StatelessLogAll);
-                                    var ccWindowInternal = ic.EnterBatch(ccWindow, "CCWindowEntry").SetCheckpointType(CheckpointType.StatelessLogAll);
-                                    var ccDone = ccInternal.SelectMany(r => new bool[0]).Concat(ccWindowInternal.SelectMany(r => new bool[0]));
+                                    var ccInternal = ic.EnterBatch(cc, "CCDataEntry").Prepend()
+                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
+                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
+                                    var ccWindowInternal = ic.EnterBatch(ccWindow, "CCWindowEntry")
+                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
+                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
+                                    var ccDone = ccInternal.Select(r => true).Concat(ccWindowInternal.Select(r => true));
                                     this.ccStage = ccDone.ForStage.StageId;
 
                                     var secondJoin = firstJoin.First
@@ -1305,7 +1342,7 @@ namespace FaultToleranceExamples
 
             lock (this)
             {
-                if (slowTime.epoch != this.currentCompletedSlowEpoch)
+                if (slowTime.epoch > this.currentCompletedSlowEpoch)
                 {
                     this.currentCompletedSlowEpoch = slowTime.epoch;
                     Console.WriteLine("Slow stable epoch " + this.currentCompletedSlowEpoch);
@@ -1401,9 +1438,7 @@ namespace FaultToleranceExamples
 
         private BatchMaker batchMaker;
         private Epoch currentSlowBatch = new Epoch(0);
-        private BatchIn<Epoch> nextSlowInnerBatch = new BatchIn<Epoch>(new Epoch(0), 0);
         private BatchIn<Epoch> currentCCBatch = new BatchIn<Epoch>(new Epoch(0), 0);
-        private BatchIn<BatchIn<Epoch>> nextCCInnerBatch = new BatchIn<BatchIn<Epoch>>(new BatchIn<Epoch>(new Epoch(0), 0), 0);
 
         private readonly Dictionary<BatchIn<Epoch>, long> slowBatchEntryTime = new Dictionary<BatchIn<Epoch>, long>();
         private readonly Dictionary<BatchIn<BatchIn<Epoch>>, long> ccBatchEntryTime = new Dictionary<BatchIn<BatchIn<Epoch>>, long>();
@@ -1417,20 +1452,17 @@ namespace FaultToleranceExamples
             {
                 this.slow.source.CompleteOuterBatch(new Epoch(slowBatch.epoch - 1));
                 this.currentSlowBatch = slowBatch;
-                this.nextSlowInnerBatch = new BatchIn<Epoch>(this.currentSlowBatch, 0);
             }
 
             if (this.processId == Program.slowBase)
             {
                 lock (this.slowBatchEntryTime)
                 {
-                    this.slowBatchEntryTime.Add(this.nextSlowInnerBatch, entryTicks);
+                    this.slowBatchEntryTime.Add(this.slow.source.NextTime(), entryTicks);
                 }
             }
 
             this.slow.source.OnNext(batch.First);
-            this.slow.source.CompleteInnerBatch();
-            ++this.nextSlowInnerBatch.batch;
             
             // tell each CC worker to start the next batch
             if (!this.currentCCBatch.Equals(ccBatch))
@@ -1444,20 +1476,17 @@ namespace FaultToleranceExamples
                     this.cc.source.CompleteOuterBatch(new BatchIn<Epoch>(ccBatch.outerTime, ccBatch.batch - 1));
                 }
                 this.currentCCBatch = ccBatch;
-                this.nextCCInnerBatch = new BatchIn<BatchIn<Epoch>>(this.currentCCBatch, 0);
             }
 
             if (this.processId == Program.slowBase)
             {
                 lock (this.ccBatchEntryTime)
                 {
-                    this.ccBatchEntryTime.Add(this.nextCCInnerBatch, entryTicks);
+                    this.ccBatchEntryTime.Add(this.cc.source.NextTime(), entryTicks);
                 }
             }
 
             this.cc.source.OnNext(batch.First.Concat(batch.Second));
-            this.cc.source.CompleteInnerBatch();
-            ++this.nextCCInnerBatch.batch;
         }
 
         private void StartBatches()
@@ -1472,13 +1501,35 @@ namespace FaultToleranceExamples
             if (args.stageId == this.perfect.slowStage)
             {
                 Epoch slowTime = new Epoch(stamp.Timestamp.a);
-                this.AcceptSlowStableTime(slowTime);
-                this.perfect.AcceptSlowDataStable(slowTime);
+                if (stamp.Timestamp.b >= Int32.MaxValue - 1 && stamp.Timestamp.c >= Int32.MaxValue - 1)
+                {
+                    this.AcceptSlowStableTime(slowTime);
+                    this.perfect.AcceptSlowDataStable(slowTime);
+                }
+                else if (slowTime.epoch > 0)
+                {
+                    slowTime = new Epoch(slowTime.epoch - 1);
+                    this.AcceptSlowStableTime(slowTime);
+                    this.perfect.AcceptSlowDataStable(slowTime);
+                }
             }
             else if (args.stageId == this.perfect.ccStage)
             {
                 BatchIn<Epoch> ccTime = new BatchIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b);
-                this.perfect.AcceptCCDataStable(ccTime);
+                if (stamp.Timestamp.c >= Int32.MaxValue - 1)
+                {
+                    this.perfect.AcceptCCDataStable(ccTime);
+                }
+                else if (ccTime.batch > 0)
+                {
+                    ccTime = new BatchIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b - 1);
+                    this.perfect.AcceptCCDataStable(ccTime);
+                }
+                else if (ccTime.outerTime.epoch > 0)
+                {
+                    ccTime = new BatchIn<Epoch>(new Epoch(stamp.Timestamp.a-1), Int32.MaxValue - 1);
+                    this.perfect.AcceptCCDataStable(ccTime);
+                }
             }
             else if (args.stageId == this.perfect.resultStage)
             {

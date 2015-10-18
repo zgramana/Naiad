@@ -210,6 +210,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                         this.logStopwatch.ElapsedTicks / TimeSpan.TicksPerMillisecond,
                         this.streams.TotalWritten
                     });
+                    this.nextLogTicks = this.logStopwatch.ElapsedTicks  + 1000 * TimeSpan.TicksPerMillisecond;
                 }
 
                 this.StartBuffer();

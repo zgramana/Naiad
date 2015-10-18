@@ -827,6 +827,18 @@ namespace Microsoft.Research.Naiad.Input
         }
 
         /// <summary>
+        /// Return the time to be used for the next sub-batch
+        /// </summary>
+        /// <returns>the next time to be sent</returns>
+        public BatchIn<TTime> NextTime()
+        {
+            lock (this)
+            {
+                return new BatchIn<TTime>(this.outerBatch, this.currentSubBatch);
+            }
+        }
+
+        /// <summary>
         /// Introduces a batch of data for the final epoch.
         /// </summary>
         /// <param name="batch">records</param>
