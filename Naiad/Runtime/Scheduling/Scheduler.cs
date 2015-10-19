@@ -650,11 +650,12 @@ namespace Microsoft.Research.Naiad.Scheduling
                     {
                         var thisOrder = this.computationStates[computationIndex].DrainItems.First();
                         var thisQueue = thisOrder.Value;
-                        thisQueue.Dequeue().PerformDrain();
+                        var item = thisQueue.Dequeue();
                         if (thisQueue.Count == 0)
                         {
                             this.computationStates[computationIndex].DrainItems.Remove(thisOrder.Key);
                         }
+                        item.PerformDrain();
                         // perform drain may have put things into drainitems that are earlier than this, so go back
                         // around the outer loop
                     }

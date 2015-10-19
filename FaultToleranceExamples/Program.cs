@@ -40,6 +40,8 @@ using Microsoft.Research.Naiad.Runtime.Progress;
 using Microsoft.Research.Naiad.Runtime.FaultTolerance;
 using Microsoft.Research.Naiad.FaultToleranceManager;
 
+using Microsoft.Research.Naiad.Examples.DifferentialDataflow;
+
 namespace FaultToleranceExamples
 {
     public static class ExtensionMethods
@@ -1066,9 +1068,22 @@ namespace FaultToleranceExamples
                 return window;
             }
 
+            private static Record FillFromSCC(Record r, SCC.Edge e)
+            {
+                r.otherKey = e.target;
+                return r;
+            }
+
             private Collection<Record, BatchIn<Epoch>> Compute(Collection<Record, BatchIn<Epoch>> input)
             {
-                return input;
+                var forSCC = input.Select(x => new SCC.Edge(x.key, x.otherKey));
+                var SCC = forSCC
+                        .TrimLeavesAndFlip()
+                        .TrimLeavesAndFlip()
+                        .SCC();
+                var doneSCC = input.Join(SCC, i => i.key, scc => scc.source, (r, e) => FillFromSCC(r, e));
+                var unique = doneSCC.Max(r => r.key, r => r.EntryTicks);
+                return unique;
             }
 
             public int reduceStage;

@@ -103,6 +103,10 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Examples\Examples.csproj">
+      <Project>{09c7f091-4d55-4dfb-95da-d985cb401668}</Project>
+      <Name>Examples</Name>
+    </ProjectReference>
     <ProjectReference Include="..\FaultToleranceManager\FaultToleranceManager.csproj">
       <Project>{543a8606-16b8-49ea-b8ac-11eb1824b51c}</Project>
       <Name>FaultToleranceManager</Name>

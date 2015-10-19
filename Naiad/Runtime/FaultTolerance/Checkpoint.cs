@@ -916,7 +916,8 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                     }
                     else if (outstandingCount != 0)
                     {
-                        throw new ApplicationException("Bad outstanding notification count " + outstandingCount);
+                        throw new ApplicationException("Bad outstanding notification count " + outstandingCount + " "
+                            + this.stage.ToString() + "." + this.vertex.VertexId);
                     }
                 }
 
