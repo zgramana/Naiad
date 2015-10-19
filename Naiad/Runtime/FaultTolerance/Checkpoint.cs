@@ -909,7 +909,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                     long outstandingCount = requested.Second.Second.Second - deliveredCount;
                     if (outstandingCount == 1)
                     {
-                        Console.WriteLine(this.vertex + " replacing " + requested.Second.First);
+                        //Console.WriteLine(this.vertex + " replacing " + requested.Second.First);
                         this.vertex.PushEventTime(requested.First);
                         this.vertex.NotifyAt(requested.Second.First, requested.Second.Second.First);
                         this.vertex.PopEventTime();

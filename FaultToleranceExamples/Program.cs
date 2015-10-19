@@ -278,6 +278,7 @@ namespace FaultToleranceExamples
             public int queryProc;
             public int baseProc;
             public int range;
+            public int workerCount;
 
             public class PrependVertex<R, T> : UnaryVertex<R, R, T> where T : Time<T> where R : IRecord
             {
@@ -763,7 +764,7 @@ namespace FaultToleranceExamples
                     };
                 }
 
-                for (int i=0; i<this.range; ++i)
+                for (int i=0; i<this.workerCount; ++i)
                 {
                     yield return new Record
                     {
@@ -905,6 +906,8 @@ namespace FaultToleranceExamples
                 this.dataSource = new SubBatchDataSource<Record, BatchIn<Epoch>>();
 
                 Placement placement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range), Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
+                this.workerCount = this.range * computation.Controller.Configuration.WorkerCount;
+
                 Placement senderPlacement = new Placement.ProcessRange(Enumerable.Range(this.queryProc, 1), Enumerable.Range(0, 1));
 
                 // prep all the inputs using the pipeline placement
@@ -1556,12 +1559,12 @@ namespace FaultToleranceExamples
         static private int fbBase = 1;
         static private int fbRange = 1;
         static private int fpBase = 2;
-        static private int fpRange = 1;
+        static private int fpRange = 2;
         static private int numberOfKeys = 100;
         static private int fastBatchSize = 1;
         static private int fastSleepTime = 1000;
-        static private int ccBatchTime = 1000;
-        static private int slowBatchTime = 6000;
+        static private int ccBatchTime = 5000;
+        static private int slowBatchTime = 20000;
         static private int htBatchSize = 10;
         static private int htSleepTime = 1000;
         static private int htInitialBatches = 100;
@@ -1601,6 +1604,7 @@ namespace FaultToleranceExamples
             this.processId = conf.ProcessID;
             this.processes = conf.Processes;
             Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
+            Placement batchSenderPlacement = new Placement.ProcessRange(Enumerable.Range(fpBase, 1), Enumerable.Range(0, 1));
 
             if (inputPlacement.Select(x => x.ProcessId).Contains(this.processId))
             {
@@ -1629,16 +1633,19 @@ namespace FaultToleranceExamples
                 this.slow = new SlowPipeline(slowBase, slowRange);
                 this.cc = new CCPipeline(ccBase, ccRange);
                 //this.buggy = new FastPipeline(slowBase, fbBase, fbRange);
-                this.perfect = new FastPipeline(slowBase, fpBase, fpRange);
+                this.perfect = new FastPipeline(fpBase, fpBase, fpRange);
 
                 this.batchCoordinator = new BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, BatchIn<Epoch>>>>>();
-                using (var p = computation.WithPlacement(inputPlacement))
+                using (var bTrigger = computation.WithPlacement(batchSenderPlacement))
                 {
-                    computation.NewInput(this.batchCoordinator).SetCheckpointType(CheckpointType.None)
-                        .PartitionBy(x => x.First).SetCheckpointType(CheckpointType.None)
-                        .PartitionedActionStage(x => this.SendBatch(x.First, x.Second.First, x.Second.Second));
+                    var batchSender = computation.NewInput(this.batchCoordinator).SetCheckpointType(CheckpointType.None);
+                    using (var bSend = computation.WithPlacement(inputPlacement))
+                    {
+                        batchSender
+                            .PartitionBy(x => x.First).SetCheckpointType(CheckpointType.None)
+                            .PartitionedActionStage(x => this.SendBatch(x.First, x.Second.First, x.Second.Second));
+                    }
                 }
-
                 this.cc.Make(computation, this.slow, this.perfect);
 
                 if (conf.ProcessID == 0)
@@ -1653,17 +1660,14 @@ namespace FaultToleranceExamples
                 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
                 //computation.OnFrontierChange += (x, y) => { Console.WriteLine(stopwatch.Elapsed + "\t" + string.Join(", ", y.NewFrontier)); Console.Out.Flush(); };
 
-                if (Enumerable.Range(slowBase, slowRange).Contains(conf.ProcessID))
+                if (conf.ProcessID == fpBase)
                 {
-                    if (conf.ProcessID == slowBase)
-                    {
-                        computation.OnStageStable += this.ReactToStable;
-                        this.StartBatches();
-                    }
-                    else
-                    {
-                        this.batchCoordinator.OnCompleted();
-                    }
+                    computation.OnStageStable += this.ReactToStable;
+                    this.StartBatches();
+                }
+                else
+                {
+                    this.batchCoordinator.OnCompleted();
                 }
 
                 if (conf.ProcessID == 0)
@@ -1677,8 +1681,8 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
-                        System.Threading.Thread.Sleep(Timeout.Infinite);
-                        System.Threading.Thread.Sleep(10000);
+                        //System.Threading.Thread.Sleep(Timeout.Infinite);
+                        System.Threading.Thread.Sleep(15000);
                         if (conf.Processes > 2)
                         {
                             manager.FailProcess(1);

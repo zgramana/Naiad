@@ -85,7 +85,7 @@ namespace Microsoft.Research.Naiad.Scheduling
 
                 foreach (WorkItem item in keepItems)
                 {
-                    Console.WriteLine("Work " + item.Vertex + " " + item.Capability);
+                    //Console.WriteLine("Work " + item.Vertex + " " + item.Capability);
                     if (item.ShouldRestoreProgress)
                     {
                         this.producer.UpdateRecordCounts(item.Capability, 1);
