@@ -89,12 +89,14 @@ namespace FaultToleranceExamples
                 stream1, stream2, stream2Window, keySelector1, keySelector2, resultSelector, timeSelector, maxBatchTimeSelector, name);
         }
 
-        public static Stream<R, T> Prepend<R, T>(this Stream<R, T> stream)
+        public static Stream<R, T> Prepend<R, T>(this Stream<R, T> stream, Expression<Func<R,int>> partitionBy)
             where R : Program.IRecord
             where T : Time<T>
         {
             return stream.NewUnaryStage((i, s) => new Program.FastPipeline.PrependVertex<R, T>(i, s),
-                null, stream.PartitionedBy, "Prepend");
+                partitionBy, partitionBy, "Prepend")
+                .SetCheckpointType(CheckpointType.StatelessLogEphemeral)
+                .SetCheckpointPolicy(v => new CheckpointWithoutPersistence());
         }
 
         public static void PartitionedActionStage<R>(this Stream<Pair<int,R>, Epoch> stream, Action<R> action)
@@ -519,7 +521,7 @@ namespace FaultToleranceExamples
 
                     var input1 = stage.NewInput(stream1, (message, vertex) => vertex.OnReceive1(message), x => keySelector1(x).GetHashCode());
                     var input2 = stage.NewInput(stream2, (message, vertex) => vertex.OnReceive2(message), null);
-                    var input3 = stage.NewInput(stream3, (message, vertex) => vertex.OnReceive3(message), null);
+                    var input3 = stage.NewInput(stream3, (message, vertex) => vertex.OnReceive3(message), w => w.First);
 
                     var output = stage.NewOutput(vertex => vertex.Output);
                     var readyOutput = stage.NewOutput(vertex => vertex.readyOutput);
@@ -900,27 +902,19 @@ namespace FaultToleranceExamples
             public void Make(Computation computation,
                 Stream<SlowPipeline.Record, BatchIn<Epoch>> slowOutput,
                 Stream<Pair<long, long>, BatchIn<Epoch>> slowTimeWindow,
+                Placement slowPlacement,
                 Collection<CCPipeline.Record, BatchIn<Epoch>> ccOutput,
-                Stream<Pair<long, long>, BatchIn<Epoch>> ccTimeWindow)
+                Stream<Pair<long, long>, BatchIn<Epoch>> ccTimeWindow,
+                Placement ccPlacement)
             {
                 this.dataSource = new SubBatchDataSource<Record, BatchIn<Epoch>>();
 
-                Placement placement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range), Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
+                Placement fastPlacement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range), Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
                 this.workerCount = this.range * computation.Controller.Configuration.WorkerCount;
 
                 Placement senderPlacement = new Placement.ProcessRange(Enumerable.Range(this.queryProc, 1), Enumerable.Range(0, 1));
 
-                // prep all the inputs using the pipeline placement
-                using (var prepareProcs = computation.WithPlacement(placement))
-                {
-                    var slow = slowOutput.ForcePartitionBy(r => r.key);
-                    var broadcastSlowWindow = slowTimeWindow.SelectMany(w => Enumerable.Range(0, placement.Count).Select(d => d.PairWith(w)));
-                    var slowWindow = broadcastSlowWindow.ForcePartitionBy(r => r.First);
-                    var cc = ccOutput.ToStateless().Output.SelectMany(r => Enumerable.Repeat(r.record, (int)Math.Max(0, r.weight))).ForcePartitionBy(r => r.key);
-                    var broadcastCCWindow = ccTimeWindow.SelectMany(w => Enumerable.Range(0, placement.Count).Select(d => d.PairWith(w)));
-                    var ccWindow = broadcastCCWindow.ForcePartitionBy(r => r.First);
-
-                    // send the queries from a single worker
+                // send the queries from a single worker
                     using (var sender = computation.WithPlacement(senderPlacement))
                     {
                         var queries = computation.NewInput(dataSource, "FastQueries").SetCheckpointType(CheckpointType.CachingInput);
@@ -928,38 +922,61 @@ namespace FaultToleranceExamples
                         // keep the single placement for the batchedentry since that means the exit vertex will be routed via that same worker
                         var output = computation.BatchedEntry<Record, BatchIn<Epoch>>(ic =>
                             {
-                                // do the computation using the pipeline placement
-                                using (var computeProcs = computation.WithPlacement(placement))
+                                Stream<SlowPipeline.Record, BatchIn<BatchIn<Epoch>>> slowInternal;
+                                Stream<Pair<int, Pair<long, long>>, BatchIn<BatchIn<Epoch>>> slowWindowInternal;
+                                using (var prepareSlow = computation.WithPlacement(slowPlacement))
                                 {
-                                    var slowInternal = ic.EnterBatch(slow, "SlowDataEntry").Prepend()
+                                    slowInternal = ic
+                                        .EnterBatch(slowOutput, "SlowDataEntry")
                                         .SetCheckpointPolicy(v => new CheckpointEagerly())
                                         .SetCheckpointType(CheckpointType.StatelessLogAll);
-                                    var slowWindowInternal = ic.EnterBatch(slowWindow, "SlowWindowEntry")
+                                    var broadcastSlowWindow = slowTimeWindow
+                                        .SelectMany(w => Enumerable.Range(0, fastPlacement.Count).Select(d => d.PairWith(w)));
+                                    slowWindowInternal = ic
+                                        .EnterBatch(broadcastSlowWindow, "SlowWindowEntry")
                                         .SetCheckpointPolicy(v => new CheckpointEagerly())
                                         .SetCheckpointType(CheckpointType.StatelessLogAll);
                                     var slowDone = slowInternal.Select(r => true).Concat(slowWindowInternal.Select(r => true));
                                     this.slowStage = slowDone.ForStage.StageId;
+                                }
 
+                                Stream<CCPipeline.Record, BatchIn<BatchIn<Epoch>>> ccInternal;
+                                Stream<Pair<int, Pair<long, long>>, BatchIn<BatchIn<Epoch>>> ccWindowInternal;
+                                using (var prepareCC = computation.WithPlacement(ccPlacement))
+                                {
+                                    var cc = ccOutput
+                                        .ToStateless().Output
+                                        .SelectMany(r => Enumerable.Repeat(r.record, (int)Math.Max(0, r.weight)));
+                                    ccInternal = ic
+                                        .EnterBatch(cc, "CCDataEntry")
+                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
+                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
+                                    var broadcastCCWindow = ccTimeWindow
+                                        .SelectMany(w => Enumerable.Range(0, fastPlacement.Count).Select(d => d.PairWith(w)));
+                                    ccWindowInternal = ic
+                                        .EnterBatch(broadcastCCWindow, "CCWindowEntry")
+                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
+                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
+                                    var ccDone = ccInternal.Select(r => true).Concat(ccWindowInternal.Select(r => true));
+                                    this.ccStage = ccDone.ForStage.StageId;
+                                }
+
+                                // do the computation using the pipeline placement
+                                using (var computeProcs = computation.WithPlacement(fastPlacement))
+                                {
+                                    var slowForJoin = slowInternal.Prepend(r => r.key);
                                     var firstJoin = queries.SetCheckpointPolicy(i => new CheckpointWithoutPersistence())
                                         .StaggeredJoin(
-                                            slowInternal,
+                                            slowForJoin,
                                             slowWindowInternal,
                                             i => i.slowJoinKey, s => s.key, (i, s, w) => { i.slowWindow = w; return i; },
                                             t => t.outerTime.outerTime, t => new BatchIn<BatchIn<Epoch>>(new BatchIn<Epoch>(t, Int32.MaxValue-1), Int32.MaxValue-1),
                                             "SlowJoin");
 
-                                    var ccInternal = ic.EnterBatch(cc, "CCDataEntry").Prepend()
-                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
-                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
-                                    var ccWindowInternal = ic.EnterBatch(ccWindow, "CCWindowEntry")
-                                        .SetCheckpointPolicy(v => new CheckpointEagerly())
-                                        .SetCheckpointType(CheckpointType.StatelessLogAll);
-                                    var ccDone = ccInternal.Select(r => true).Concat(ccWindowInternal.Select(r => true));
-                                    this.ccStage = ccDone.ForStage.StageId;
-
+                                    var ccForJoin = ccInternal.Prepend(r => r.key);
                                     var secondJoin = firstJoin.First
                                         .StaggeredJoin(
-                                            ccInternal,
+                                            ccForJoin,
                                             ccWindowInternal,
                                             i => i.ccJoinKey, c => c.key, (i, c, w) => { i.ccWindow = w; return i; },
                                             t => t.outerTime, t => new BatchIn<BatchIn<Epoch>>(t, Int32.MaxValue-1),
@@ -968,8 +985,8 @@ namespace FaultToleranceExamples
                                     // now collect the ready signals at the sender vertex
                                     using (var readyProcs = computation.WithPlacement(senderPlacement))
                                     {
-                                        JoinReadyVertex.JoinReadyStage(firstJoin.Second, placement.Count, t => this.AcceptSlowDataReady(t.outerTime.outerTime), "SlowReady");
-                                        JoinReadyVertex.JoinReadyStage(secondJoin.Second, placement.Count, t => this.AcceptCCDataReady(t.outerTime), "CCReady");
+                                        JoinReadyVertex.JoinReadyStage(firstJoin.Second, fastPlacement.Count, t => this.AcceptSlowDataReady(t.outerTime.outerTime), "SlowReady");
+                                        JoinReadyVertex.JoinReadyStage(secondJoin.Second, fastPlacement.Count, t => this.AcceptCCDataReady(t.outerTime), "CCReady");
                                         var exit = ExitVertex.ExitStage(secondJoin.First, this);
                                         this.resultStage = exit.ForStage.StageId;
                                         return exit;
@@ -980,7 +997,6 @@ namespace FaultToleranceExamples
                                 .SetCheckpointType(CheckpointType.StatelessLogEphemeral)
                                 .SetCheckpointPolicy(s => new CheckpointWithoutPersistence());
                     }
-                }
             }
 
             public FastPipeline(int queryProc, int baseProc, int range)
@@ -1123,7 +1139,7 @@ namespace FaultToleranceExamples
                                 slowWindow = c.EnterBatch(slowOutput.Second);
                             }
 
-                            perfect.Make(computation, slowData, slowWindow, cc, ccWindow);
+                            perfect.Make(computation, slowData, slowWindow, slowPlacement, cc, ccWindow, ccPlacement);
 
                             return cc;
                         }, "CCPipeLineExitOuterBatch");
