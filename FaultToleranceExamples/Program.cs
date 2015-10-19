@@ -93,7 +93,8 @@ namespace FaultToleranceExamples
             where R : Program.IRecord
             where T : Time<T>
         {
-            return stream.NewUnaryStage((i, s) => new Program.FastPipeline.PrependVertex<R, T>(i, s), null, null, "Prepend");
+            return stream.NewUnaryStage((i, s) => new Program.FastPipeline.PrependVertex<R, T>(i, s),
+                null, stream.PartitionedBy, "Prepend");
         }
 
         public static void PartitionedActionStage<R>(this Stream<Pair<int,R>, Epoch> stream, Action<R> action)
@@ -145,7 +146,7 @@ namespace FaultToleranceExamples
 
                 public override string ToString()
                 {
-                    return key + " " + count + " " + entryTicks;
+                    return key + " " + count + " " + EntryTicks;
                 }
             }
 
@@ -166,13 +167,13 @@ namespace FaultToleranceExamples
             public Stream<Pair<long,long>, Epoch> TimeWindow(Stream<Record, Epoch> input, int workerCount)
             {
                 var parallelMin = input
-                    .Where(r => r.entryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
-                    .Min(r => r.key.GetHashCode() % workerCount, r => r.entryTicks, i => new CheckpointEagerly());
+                    .Where(r => r.EntryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
+                    .Min(r => r.key.GetHashCode() % workerCount, r => r.EntryTicks, i => new CheckpointEagerly());
                 var min = parallelMin.Min(r => true, r => r.Second, i => new CheckpointEagerly());
 
                 var parallelMax = input
-                    .Where(r => r.entryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
-                    .Max(r => r.key.GetHashCode() % workerCount, r => r.entryTicks, i => new CheckpointEagerly());
+                    .Where(r => r.EntryTicks > 0).SetCheckpointPolicy(i => new CheckpointEagerly())
+                    .Max(r => r.key.GetHashCode() % workerCount, r => r.EntryTicks, i => new CheckpointEagerly());
                 var max = parallelMax.Max(r => true, r => r.Second, i => new CheckpointEagerly());
 
                 var consumable = min
@@ -215,20 +216,6 @@ namespace FaultToleranceExamples
                             }, "ExitSlowBatch");
 
                     computed = this.Compute(reduced);
-
-                    //weighted = computed
-                    //    .Select(r =>
-                    //    {
-                    //        if (r.EntryTicks < 0)
-                    //        {
-                    //            r.EntryTicks = -r.EntryTicks;
-                    //            return new Weighted<Record>(r, -1);
-                    //        }
-                    //        else
-                    //        {
-                    //            return new Weighted<Record>(r, 1);
-                    //        }
-                    //    }).AsCollection(false);
 
                     window = this.TimeWindow(reduced, placement.Count);
                 }
@@ -294,13 +281,14 @@ namespace FaultToleranceExamples
 
             public class PrependVertex<R, T> : UnaryVertex<R, R, T> where T : Time<T> where R : IRecord
             {
-                private HashSet<T> seenAny = new HashSet<T>();
+                private readonly HashSet<T> seenAny = new HashSet<T>();
 
                 public override void OnReceive(Message<R, T> message)
                 {
                     var output = this.Output.GetBufferForTime(message.time);
                     if (!seenAny.Contains(message.time))
                     {
+                        //Console.WriteLine(this.VertexId + " prepend " + message.time);
                         this.NotifyAt(message.time);
                         this.seenAny.Add(message.time);
 
@@ -361,7 +349,7 @@ namespace FaultToleranceExamples
 
                 public void OnReceive1(Message<TInput1, TInner> message)
                 {
-                    Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
+                    //Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
                     TOuter outer = timeSelector(message.time);
 
                     Dictionary<TKey, List<TInput2>> currentValues = this.values[outer];
@@ -381,14 +369,14 @@ namespace FaultToleranceExamples
                         }
                         else
                         {
-                            Console.WriteLine(this.Stage.Name + " no matches for " + key);
+                            Console.WriteLine(this.Stage.Name + "." + this.VertexId + " no matches for " + message.time + " " + key);
                         }
                     }
                 }
 
                 public void OnReceive2(Message<TInput2, TInner> message)
                 {
-                    Console.WriteLine(this.Stage.Name + " Receive2 " + message.time);
+                    //Console.WriteLine(this.Stage.Name + "." + this.VertexId + " Receive2 " + message.time);
                     TOuter outerTime = timeSelector(message.time);
 
                     int baseRecord = 0;
@@ -397,13 +385,13 @@ namespace FaultToleranceExamples
 
                     if (message.payload[0].EntryTicks == -1)
                     {
-                        Console.WriteLine("Notifying at " + maxBatchTimeSelector(outerTime) + " for " + message.time);
+                        //Console.WriteLine("Notifying at " + maxBatchTimeSelector(outerTime) + " for " + message.time);
                         this.NotifyAt(maxBatchTimeSelector(outerTime));
 
                         ++baseRecord;
                         if (this.partialValues.ContainsKey(outerTime))
                         {
-                            Console.WriteLine(this.Stage.Name + " Replacing partial values for " + outerTime);
+                            Console.WriteLine(this.Stage.Name + "." + this.VertexId + " Replacing partial values for " + outerTime);
                         }
                         this.partialValues[outerTime] = new Dictionary<TKey, List<TInput2>>();
                     }
@@ -420,7 +408,7 @@ namespace FaultToleranceExamples
                         {
                             if (this.values.ContainsKey(outerTime))
                             {
-                                Console.WriteLine(this.Stage.Name + " replacing values for " + outerTime);
+                                Console.WriteLine(this.Stage.Name + "." + this.VertexId + " replacing values for " + outerTime);
                             }
                             this.values[outerTime] = this.partialValues[outerTime];
                             this.partialValues.Remove(outerTime);
@@ -430,13 +418,16 @@ namespace FaultToleranceExamples
                                 var ready = this.readyOutput.GetBufferForTime(message.time);
                                 ready.Send(true);
                             }
-                            Console.WriteLine(this.Stage.Name + " R2 " + outerTime + ": " + currentValues.Select(k => k.Value.Count).Sum());
+                            Console.WriteLine(this.Stage.Name + "." + this.VertexId + " R2 " + outerTime + ": " + currentValues.Select(k => k.Value.Count).Sum());
+                            //if (this.Stage.Name == "SlowJoin")
+                            //{
                             //foreach (var k in currentValues.Keys)
                             //{
-                            //Console.WriteLine(this.Stage.Name + " R2 " + k + ": " + currentValues[k].Count);
-                            //foreach (var v in currentValues[k])
-                            //{
-                            //    Console.WriteLine("  " + this.Stage.Name + " R2 " + v + " ");
+                            //    Console.WriteLine(this.Stage.Name + " R2 " + k + ": " + currentValues[k].Count);
+                                //foreach (var v in currentValues[k])
+                                //{
+                                //    Console.WriteLine("  " + this.Stage.Name + " R2 " + v + " ");
+                                //}
                             //}
                             //}
                         }
@@ -480,7 +471,7 @@ namespace FaultToleranceExamples
 
                     if (time.Equals(this.maxBatchTimeSelector(outerTime)))
                     {
-                        Console.WriteLine("Removing " + outerTime + " for " + time);
+                        //Console.WriteLine("Removing " + outerTime + " for " + time);
 
                         this.values.Remove(outerTime);
                         this.windows.Remove(outerTime);
@@ -526,8 +517,8 @@ namespace FaultToleranceExamples
                     stage.SetCheckpointPolicy(v => new CheckpointWithoutPersistence());
 
                     var input1 = stage.NewInput(stream1, (message, vertex) => vertex.OnReceive1(message), x => keySelector1(x).GetHashCode());
-                    var input2 = stage.NewInput(stream2, (message, vertex) => vertex.OnReceive2(message), x => keySelector2(x).GetHashCode());
-                    var input3 = stage.NewInput(stream3, (message, vertex) => vertex.OnReceive3(message), x => x.First);
+                    var input2 = stage.NewInput(stream2, (message, vertex) => vertex.OnReceive2(message), null);
+                    var input3 = stage.NewInput(stream3, (message, vertex) => vertex.OnReceive3(message), null);
 
                     var output = stage.NewOutput(vertex => vertex.Output);
                     var readyOutput = stage.NewOutput(vertex => vertex.readyOutput);
@@ -922,7 +913,7 @@ namespace FaultToleranceExamples
                     var slow = slowOutput.ForcePartitionBy(r => r.key);
                     var broadcastSlowWindow = slowTimeWindow.SelectMany(w => Enumerable.Range(0, placement.Count).Select(d => d.PairWith(w)));
                     var slowWindow = broadcastSlowWindow.ForcePartitionBy(r => r.First);
-                    var cc = ccOutput.ForcePartitionBy(r => r.key).ToStateless().Output.SelectMany(r => Enumerable.Repeat(r.record, (int)Math.Max(0, r.weight)));
+                    var cc = ccOutput.ToStateless().Output.SelectMany(r => Enumerable.Repeat(r.record, (int)Math.Max(0, r.weight))).ForcePartitionBy(r => r.key);
                     var broadcastCCWindow = ccTimeWindow.SelectMany(w => Enumerable.Range(0, placement.Count).Select(d => d.PairWith(w)));
                     var ccWindow = broadcastCCWindow.ForcePartitionBy(r => r.First);
 
@@ -1214,7 +1205,7 @@ namespace FaultToleranceExamples
             {
                 if (checkpointLog == null)
                 {
-                    string fileName = String.Format("fastPipe.{0:D3}.log", this.processId);
+                    string fileName = String.Format("inputLatency.{0:D3}.log", this.processId);
                     this.checkpointLogFile = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
                     this.checkpointLog = new StreamWriter(this.checkpointLogFile);
                     var flush = new System.Threading.Thread(new System.Threading.ThreadStart(() => FlushThread()));
@@ -1255,7 +1246,7 @@ namespace FaultToleranceExamples
 
             // We ensure that each key has at least one edge present that is never removed, and those are introduced
             // using this method
-            private IEnumerable<HTRecord> MakeStartingBatch(Random random)
+            private IEnumerable<HTRecord> MakeAllKeyBatch(Random random, long entryTicks)
             {
                 for (int i = (this.processId % this.processes); i < Program.numberOfKeys; i += this.processes)
                 {
@@ -1263,7 +1254,7 @@ namespace FaultToleranceExamples
                     {
                         key = i,
                         otherKey = random.Next(numberOfKeys),
-                        entryTicks = 0
+                        entryTicks = entryTicks
                     };
                 }
             }
@@ -1275,17 +1266,6 @@ namespace FaultToleranceExamples
 
             private IEnumerable<HTRecord> MakeBatch(Random random, int batchSize, long entryTicks)
             {
-                if (entryTicks >= 0)
-                {
-                    // the batch is being added, so save its time
-                    this.batchTimes.Enqueue(entryTicks);
-                }
-                else
-                {
-                    // the batch is being removed, so look up the time that it was put in
-                    entryTicks = -(this.batchTimes.Dequeue());
-                }
-
                 for (int i = 0; i < batchSize; ++i)
                 {
                     yield return new HTRecord
@@ -1299,7 +1279,7 @@ namespace FaultToleranceExamples
 
             private int batchesReturned = 0;
 
-            public Pair<IEnumerable<HTRecord>,IEnumerable<HTRecord>> NextBatch(long entryTicks)
+            public Pair<IEnumerable<HTRecord>, IEnumerable<HTRecord>> NextBatch(long entryTicks)
             {
                 IEnumerable<HTRecord> inBatch, outBatch = new HTRecord[0];
 
@@ -1311,17 +1291,18 @@ namespace FaultToleranceExamples
                     // make matching random number generators for adding and removing records
                     this.introduceRandom = new Random(randomSeed);
                     this.removeRandom = new Random(randomSeed);
-
-                    // add all the records that are not going to get removed.
-                    inBatch = this.MakeStartingBatch(thisProcessRandom);
                 }
-                else
+
+                // the batch is being added, so save its time
+                this.batchTimes.Enqueue(entryTicks);
+
+                inBatch = this.MakeAllKeyBatch(this.introduceRandom, entryTicks).Concat(this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks)).ToArray();
+
+                if (this.batchesReturned >= Program.htInitialBatches)
                 {
-                    inBatch = this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks).ToArray();
-                    if (this.batchesReturned >= Program.htInitialBatches)
-                    {
-                        outBatch = this.MakeBatch(this.removeRandom, Program.htBatchSize, -1).ToArray();
-                    }
+                    // the batch is being removed, so look up the time that it was put in
+                    entryTicks = -(this.batchTimes.Dequeue());
+                    outBatch = this.MakeAllKeyBatch(this.removeRandom, entryTicks).Concat(this.MakeBatch(this.removeRandom, Program.htBatchSize, entryTicks)).ToArray();
                 }
 
                 ++this.batchesReturned;
@@ -1364,11 +1345,13 @@ namespace FaultToleranceExamples
                 }
             }
 
-            //long now = DateTime.Now.Ticks;
-            //foreach (var ccBatch in earlier)
-            //{
-            //    Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + ((double)(now - ccBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
-            //}
+            long now = DateTime.Now.Ticks;
+            foreach (var ccBatch in earlier)
+            {
+                double latency = (double)(now - ccBatch.Value) / (double)TimeSpan.TicksPerMillisecond;
+                this.WriteLog("C" + ccBatch.Key + " " + latency);
+                //Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + latency);
+            }
         }
 
         public void AcceptSlowReduceStableTime(Pointstamp stamp)
@@ -1385,11 +1368,13 @@ namespace FaultToleranceExamples
                 }
             }
 
-            //long now = DateTime.Now.Ticks;
-            //foreach (var slowBatch in earlier)
-            //{
-            //    Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + ((double)(now - slowBatch.Value) / (double)TimeSpan.TicksPerMillisecond));
-            //}
+            long now = DateTime.Now.Ticks;
+            foreach (var slowBatch in earlier)
+            {
+                double latency = (double)(now - slowBatch.Value) / (double)TimeSpan.TicksPerMillisecond;
+                this.WriteLog("S" + slowBatch.Key + " " + latency);
+                //Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + latency);
+            }
         }
 
         void HighThroughputBatchInitiator()
@@ -1615,7 +1600,16 @@ namespace FaultToleranceExamples
             Configuration conf = Configuration.FromArgs(ref args);
             this.processId = conf.ProcessID;
             this.processes = conf.Processes;
-            this.batchMaker = new BatchMaker(this.processes, this.processId);
+            Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
+
+            if (inputPlacement.Select(x => x.ProcessId).Contains(this.processId))
+            {
+                this.batchMaker = new BatchMaker(slowRange, this.processId-slowBase);
+            }
+            else
+            {
+                this.batchMaker = null;
+            }
 
             if (args.Length > 0 && args[0].ToLower() == "-azure")
             {
@@ -1636,8 +1630,6 @@ namespace FaultToleranceExamples
                 this.cc = new CCPipeline(ccBase, ccRange);
                 //this.buggy = new FastPipeline(slowBase, fbBase, fbRange);
                 this.perfect = new FastPipeline(slowBase, fpBase, fpRange);
-
-                Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
 
                 this.batchCoordinator = new BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, BatchIn<Epoch>>>>>();
                 using (var p = computation.WithPlacement(inputPlacement))
