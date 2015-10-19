@@ -1570,12 +1570,12 @@ namespace FaultToleranceExamples
 #if true
         static private int slowBase = 0;
         static private int slowRange = 1;
-        static private int ccBase = 1;
+        static private int ccBase = 2;
         static private int ccRange = 1;
-        static private int fbBase = 1;
-        static private int fbRange = 1;
-        static private int fpBase = 2;
-        static private int fpRange = 2;
+        //static private int fbBase = 1;
+        //static private int fbRange = 1;
+        static private int fpBase = 3;
+        static private int fpRange = 1;
         static private int numberOfKeys = 100;
         static private int fastBatchSize = 1;
         static private int fastSleepTime = 1000;
@@ -1690,7 +1690,8 @@ namespace FaultToleranceExamples
                 {
                     IEnumerable<int> failSlow = Enumerable.Range(slowBase, slowRange);
                     IEnumerable<int> failMedium =
-                        Enumerable.Range(ccBase, ccRange).Concat(Enumerable.Range(fbBase, fbRange)).Distinct()
+                        //Enumerable.Range(ccBase, ccRange).Concat(Enumerable.Range(fbBase, fbRange)).Distinct()
+                        Enumerable.Range(ccBase, ccRange)
                         .Except(failSlow);
                     IEnumerable<int> failFast = Enumerable.Range(fpBase, fpRange)
                         .Except(failSlow.Concat(failMedium));
