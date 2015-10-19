@@ -1398,24 +1398,25 @@ namespace FaultToleranceExamples
 
         void HighThroughputBatchInitiator()
         {
-            long now = DateTime.Now.Ticks;
-            long nextSlowBatch = now / TimeSpan.TicksPerMillisecond + Program.slowBatchTime;
-            long nextCCBatch = now / TimeSpan.TicksPerMillisecond + Program.ccBatchTime;
+            long nowMs = DateTime.Now.Ticks / TimeSpan.TicksPerMillisecond;
+            long nextSlowBatch = nowMs + Program.slowBatchTime;
+            long nextCCBatch = nowMs + Program.ccBatchTime;
 
             Epoch sendingSlowBatch = new Epoch(0);
             BatchIn<Epoch> sendingCCBatch = new BatchIn<Epoch>(new Epoch(0), 0);
 
             while (true)
             {
-                now = DateTime.Now.Ticks;
+                long now = DateTime.Now.Ticks;
+                nowMs = now / TimeSpan.TicksPerMillisecond;
 
-                if (now / TimeSpan.TicksPerMillisecond > nextSlowBatch)
+                if (nowMs > nextSlowBatch)
                 {
                     sendingSlowBatch = new Epoch(sendingSlowBatch.epoch + 1);
                     nextSlowBatch += Program.slowBatchTime;
                 }
 
-                if (now / TimeSpan.TicksPerMillisecond > nextCCBatch)
+                if (nowMs > nextCCBatch)
                 {
                     sendingCCBatch = new BatchIn<Epoch>(sendingCCBatch.outerTime, sendingCCBatch.batch + 1);
                     nextCCBatch += Program.ccBatchTime;
@@ -1433,7 +1434,7 @@ namespace FaultToleranceExamples
 
                 // tell each input worker to start the next batch
                 this.batchCoordinator.OnNext(Enumerable
-                    .Range(Program.slowBase, Program.slowRange)
+                    .Range(0, Program.slowRange)
                     .Select(i => i.PairWith(now.PairWith(sendingSlowBatch.PairWith(sendingCCBatch)))));
 
                 Thread.Sleep(Program.htSleepTime);
@@ -1569,7 +1570,7 @@ namespace FaultToleranceExamples
 #else
 #if true
         static private int slowBase = 0;
-        static private int slowRange = 1;
+        static private int slowRange = 2;
         static private int ccBase = 2;
         static private int ccRange = 1;
         //static private int fbBase = 1;
@@ -1620,7 +1621,7 @@ namespace FaultToleranceExamples
             this.processId = conf.ProcessID;
             this.processes = conf.Processes;
             Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
-            Placement batchSenderPlacement = new Placement.ProcessRange(Enumerable.Range(fpBase, 1), Enumerable.Range(0, 1));
+            Placement batchTriggerPlacement = new Placement.ProcessRange(Enumerable.Range(fpBase, 1), Enumerable.Range(0, 1));
 
             if (inputPlacement.Select(x => x.ProcessId).Contains(this.processId))
             {
@@ -1652,12 +1653,12 @@ namespace FaultToleranceExamples
                 this.perfect = new FastPipeline(fpBase, fpBase, fpRange);
 
                 this.batchCoordinator = new BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, BatchIn<Epoch>>>>>();
-                using (var bTrigger = computation.WithPlacement(batchSenderPlacement))
+                using (var bTrigger = computation.WithPlacement(batchTriggerPlacement))
                 {
-                    var batchSender = computation.NewInput(this.batchCoordinator).SetCheckpointType(CheckpointType.None);
+                    var batchTrigger = computation.NewInput(this.batchCoordinator).SetCheckpointType(CheckpointType.None);
                     using (var bSend = computation.WithPlacement(inputPlacement))
                     {
-                        batchSender
+                        batchTrigger
                             .PartitionBy(x => x.First).SetCheckpointType(CheckpointType.None)
                             .PartitionedActionStage(x => this.SendBatch(x.First, x.Second.First, x.Second.Second));
                     }
