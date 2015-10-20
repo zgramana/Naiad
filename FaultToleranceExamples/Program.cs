@@ -1068,21 +1068,35 @@ namespace FaultToleranceExamples
                 return window;
             }
 
-            private static Record FillFromSCC(Record r, SCC.Edge e)
+            private static Record FillFromCC(Record r, IntPair c)
             {
-                r.otherKey = e.target;
+                r.otherKey = c.t;
                 return r;
             }
 
             private Collection<Record, BatchIn<Epoch>> Compute(Collection<Record, BatchIn<Epoch>> input)
             {
-                var forSCC = input.Select(x => new SCC.Edge(x.key, x.otherKey));
-                var SCC = forSCC
-                        .TrimLeavesAndFlip()
-                        .TrimLeavesAndFlip()
-                        .SCC();
-                var doneSCC = input.Join(SCC, i => i.key, scc => scc.source, (r, e) => FillFromSCC(r, e));
-                var unique = doneSCC.Max(r => r.key, r => r.EntryTicks);
+                // initial labels only needed for min, as the max will be improved on anyhow.
+                var nodes = input.Select(x => new IntPair(Math.Min(x.key, x.otherKey), Math.Min(x.key, x.otherKey)))
+                                 .Consolidate();
+
+                // symmetrize the graph
+                var edges = input
+                    .Select(edge => new IntPair(edge.otherKey, edge.key))
+                    .Concat(input.Select(edge => new IntPair(edge.key, edge.otherKey)));
+
+                // prioritization introduces labels from small to large (in batches).
+                var cc = nodes.Where(x => false)
+                            .FixedPoint(
+                                (lc, x) => x
+                                    .Join(edges.EnterLoop(lc), n => n.s, e => e.s, (n, e) => new IntPair(e.t, n.t))
+                                    .Concat(nodes.EnterLoop(lc))
+                                    .Min(n => n.s, n => n.t),
+                                n => n.s,
+                                Int32.MaxValue);
+
+                var doneCC = input.Join(cc, r => r.key, c => c.s, (r, c) => FillFromCC(r, c));
+                var unique = doneCC.Max(r => r.key, r => r.EntryTicks).Consolidate();
                 return unique;
             }
 

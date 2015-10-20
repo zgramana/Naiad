@@ -49,7 +49,7 @@ namespace Microsoft.Research.Naiad.Scheduling
 
             public readonly PostOffice PostOffice;
             public readonly List<WorkItem> WorkItems;
-            public readonly SortedDictionary<DrainOrder, Queue<DrainItem>> DrainItems;
+            public readonly Queue<DrainItem> DrainItems;
             public readonly DiscardManager DiscardManager;
             private readonly int index;
 
@@ -100,7 +100,7 @@ namespace Microsoft.Research.Naiad.Scheduling
                 this.InternalComputation = manager;
                 this.PostOffice = new PostOffice(scheduler, this.InternalComputation.Index);
                 this.WorkItems = new List<WorkItem>();
-                this.DrainItems = new SortedDictionary<DrainOrder, Queue<DrainItem>>();
+                this.DrainItems = new Queue<DrainItem>();
                 this.DiscardManager = new DiscardManager();
                 this.index = scheduler.Index;
                 this.Vertices = new List<Dataflow.Vertex>();
@@ -183,43 +183,6 @@ namespace Microsoft.Research.Naiad.Scheduling
                 ShouldRestoreProgress = shouldRestoreProgress;
                 Vertex = o;
             }
-        }
-
-        public struct DrainOrder : IComparable<DrainOrder>
-        {
-            public readonly Pointstamp Order;
-
-            public int CompareTo(DrainOrder other)
-            {
-                int shorter = Math.Min(this.Order.Timestamp.Length, other.Order.Timestamp.Length);
-                for (int i=0; i<shorter; ++i)
-                {
-                    if (this.Order.Timestamp[i] < other.Order.Timestamp[i])
-                    {
-                        return -1;
-                    }
-                    else if (this.Order.Timestamp[i] > other.Order.Timestamp[i])
-                    {
-                        return 1;
-                    }
-                }
-                // the times are equal up to their shared lengths. This next bit is pretty arbitrary
-                if (this.Order.Location < other.Order.Location && this.Order.Timestamp.Length < other.Order.Timestamp.Length)
-                {
-                    // is this is earlier in the graph total order, and this time is shorter, it is earlier
-                    return -1;
-                }
-                else if (this.Order.Location > other.Order.Location && this.Order.Timestamp.Length > other.Order.Timestamp.Length)
-                {
-                    // is this is later in the graph total order, and this time is longer, it is later
-                    return 1;
-                }
-
-                // fall back on the graph total order
-                return this.Order.Location.CompareTo(other.Order.Location);
-            }
-
-            public DrainOrder(Pointstamp order) { this.Order = order; }
         }
 
         public struct DrainItem 
@@ -394,14 +357,7 @@ namespace Microsoft.Research.Naiad.Scheduling
             else
             {
                 Pointstamp stamp = capability.ToPointstamp(channelId);
-                DrainOrder order = new DrainOrder(stamp);
-                Queue<DrainItem> thisQueue = null;
-                if (!this.computationStates[computationIndex].DrainItems.TryGetValue(order, out thisQueue))
-                {
-                    thisQueue = new Queue<DrainItem>();
-                    this.computationStates[computationIndex].DrainItems.Add(order, thisQueue);
-                }
-                thisQueue.Enqueue(new DrainItem(stamp, mailbox));
+                this.computationStates[computationIndex].DrainItems.Enqueue(new DrainItem(stamp, mailbox));
             }
         }
 
@@ -648,16 +604,7 @@ namespace Microsoft.Research.Naiad.Scheduling
 
                     while (this.computationStates[computationIndex].DrainItems.Count > 0)
                     {
-                        var thisOrder = this.computationStates[computationIndex].DrainItems.First();
-                        var thisQueue = thisOrder.Value;
-                        var item = thisQueue.Dequeue();
-                        if (thisQueue.Count == 0)
-                        {
-                            this.computationStates[computationIndex].DrainItems.Remove(thisOrder.Key);
-                        }
-                        item.PerformDrain();
-                        // perform drain may have put things into drainitems that are earlier than this, so go back
-                        // around the outer loop
+                        this.computationStates[computationIndex].DrainItems.Dequeue().PerformDrain();
                     }
 
                     this.computationStates[computationIndex].Producer.Start();   // tell everyone about records produced and consumed.
@@ -685,7 +632,7 @@ namespace Microsoft.Research.Naiad.Scheduling
 
                     state.PostOffice.CheckVertexMailboxes(receiver);
 
-                    foreach (var drainItem in state.DrainItems.SelectMany(o => o.Value).Where(i => i.Mailbox.Vertex == receiver))
+                    foreach (var drainItem in state.DrainItems.Where(i => i.Mailbox.Vertex == receiver))
                     {
                         drainItem.PerformDrain();
                     }
@@ -840,7 +787,9 @@ namespace Microsoft.Research.Naiad.Scheduling
                         valid = !dominated;
 
                         if (valid)
+                        {
                             itemToRun = i;
+                        }
                     }
                 }
             }

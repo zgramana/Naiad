@@ -43,7 +43,7 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
             if (this.LessThan(a, b))
                 return -1;
 
-            if (this.LessThan(a, b))
+            if (this.LessThan(b, a))
                 return 1;
 
             return (a.Location - b.Location);
@@ -60,6 +60,9 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
                 return false;
             else
             {
+                if (a.Timestamp[0] < b.Timestamp[0])
+                    return true;
+
                 var increment = depth < 0;
                 depth = Math.Abs(depth);
 

@@ -575,11 +575,11 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
             // this is a hack for inputs which have a request inserted before time starts
             if (lastFrontier.Empty && upTo.Empty)
             {
-                foreach (KeyValuePair<T, Dictionary<Pair<T,T>,long>> baseCount in this.counts.Where(tc =>
+                foreach (KeyValuePair<T, Dictionary<Pair<T, T>, long>> baseCount in this.counts.Where(tc =>
                 { Pointstamp p = tc.Key.ToPointstamp(nodeId); return p.Timestamp[0] < 0; }))
-            {
-                intersected.counts.Add(baseCount.Key, baseCount.Value);
-            }
+                {
+                    intersected.counts.Add(baseCount.Key, baseCount.Value);
+                }
             }
             return intersected;
         }

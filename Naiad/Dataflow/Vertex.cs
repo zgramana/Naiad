@@ -558,6 +558,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// <param name="reader">The reader.</param>
         protected override void Restore(NaiadReader reader)
         {
+            throw new ApplicationException();
             int workItemsCount = reader.Read<int>(this.SerializationFormat.GetSerializer<Int32>());
             for (int i = 0; i < workItemsCount; ++i)
             {

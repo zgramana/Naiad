@@ -525,6 +525,10 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         internal void RegisterDeliveredNotificationTime(T time)
         {
             this.deliveredNotifications.Add(time, 1);
+            if (this.deliveredNotifications.Counts[time] > 1)
+            {
+                throw new ApplicationException();
+            }
         }
 
         internal abstract void ReplayVertex();
@@ -907,16 +911,22 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                 {
                     long deliveredCount = this.deliveredNotifications.GetCountIfAny(requested.Second.Second.First);
                     long outstandingCount = requested.Second.Second.Second - deliveredCount;
-                    if (outstandingCount == 1)
+                    if (outstandingCount == 1 && deliveredCount == 0)
                     {
+                        Console.WriteLine("Replacing outstanding notification " +
+                            requested.First + " asked for " + requested.Second.First + "," + requested.Second.Second.First + " count "
+                            + requested.Second.Second.Second + " delivered " + deliveredCount + " "
+                            + this.stage.ToString() + "." + this.vertex.VertexId);
                         //Console.WriteLine(this.vertex + " replacing " + requested.Second.First);
                         this.vertex.PushEventTime(requested.First);
                         this.vertex.NotifyAt(requested.Second.First, requested.Second.Second.First);
                         this.vertex.PopEventTime();
                     }
-                    else if (outstandingCount != 0)
+                    else if (!(outstandingCount == 0 && (deliveredCount == 0 || deliveredCount == 1)))
                     {
-                        throw new ApplicationException("Bad outstanding notification count " + outstandingCount + " "
+                        throw new ApplicationException("Bad outstanding notification count " +
+                            requested.First + " asked for " + requested.Second.First + "," + requested.Second.Second.First + " count "
+                            + requested.Second.Second.Second + " delivered " + deliveredCount + " "
                             + this.stage.ToString() + "." + this.vertex.VertexId);
                     }
                 }
