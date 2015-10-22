@@ -177,6 +177,11 @@ namespace Microsoft.Research.Naiad
             return this.computation.WithPlacement(scopedPlacement);
         }
 
+        public TemporaryCheckpointPolicy WithCheckpointPolicy(Func<int, ICheckpointPolicy> scopedCheckpointPolicy)
+        {
+            return this.computation.WithCheckpointPolicy(scopedCheckpointPolicy);
+        }
+
         public StreamContext Context { get { return this.computation.Context; } }
 
         public Controller Controller
@@ -429,6 +434,13 @@ namespace Microsoft.Research.Naiad
         /// <param name="scopedPlacement">the placement to use in the scope</param>
         /// <returns>object that will revert to the previous placement on disposal</returns>
         TemporaryPlacement WithPlacement(Placement scopedPlacement);
+
+        /// <summary>
+        /// Adopt a different checkpoint policy until the returned object is disposed
+        /// </summary>
+        /// <param name="scopedCheckpointPolicy">the policy to use in the scope</param>
+        /// <returns>object that will revert to the previous policy on disposal</returns>
+        TemporaryCheckpointPolicy WithCheckpointPolicy(Func<int, ICheckpointPolicy> scopedCheckpointPolicy);
 
         /// <summary>
         /// A base context for the computation

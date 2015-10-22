@@ -709,17 +709,7 @@ namespace FaultToleranceExamples
                         }
 
                         Epoch slowTime = goodSlowData.Max();
-                        foreach (var t in goodSlowData)
-                        {
-                            this.slowDataReady.Remove(t);
-                        }
-
                         BatchIn<Epoch> ccTime = goodCCData.Max();
-                        foreach (var t in goodCCData)
-                        {
-                            this.ccDataReady.Remove(t);
-                        }
-
                         BatchIn<Epoch> newFastTime;
 
                         if (ccTime.outerTime.epoch > slowTime.epoch)
@@ -736,6 +726,16 @@ namespace FaultToleranceExamples
                         if (!this.fastTime.HasValue || !newFastTime.LessThan(this.fastTime.Value))
                         {
                             this.fastTime = newFastTime;
+                            foreach (var t in goodSlowData)
+                            {
+                                this.slowDataReady.Remove(t);
+                            }
+                            this.slowDataReady.Add(slowTime);
+                            foreach (var t in goodCCData)
+                            {
+                                this.ccDataReady.Remove(t);
+                            }
+                            this.ccDataReady.Add(ccTime);
 
                             Console.WriteLine("Setting new fast time " + this.fastTime.Value);
                             this.dataSource.StartOuterBatch(this.fastTime.Value);
@@ -1074,31 +1074,35 @@ namespace FaultToleranceExamples
                 return r;
             }
 
-            private Collection<Record, BatchIn<Epoch>> Compute(Collection<Record, BatchIn<Epoch>> input)
+            private Collection<Record, BatchIn<Epoch>> Compute(Computation computation, Collection<Record, BatchIn<Epoch>> input)
             {
-                return input;
-                //// initial labels only needed for min, as the max will be improved on anyhow.
-                //var nodes = input.Select(x => new IntPair(Math.Min(x.key, x.otherKey), Math.Min(x.key, x.otherKey)))
-                //                 .Consolidate();
+                //return input;
+                using (var cp = computation.WithCheckpointPolicy(v => new CheckpointAtEpoch<BatchIn<Epoch>>(2)))
+                {
+                    // initial labels only needed for min, as the max will be improved on anyhow.
+                    var nodes = input.Select(x => new IntPair(Math.Min(x.key, x.otherKey), Math.Min(x.key, x.otherKey)))
+                                     .Consolidate();
 
-                //// symmetrize the graph
-                //var edges = input
-                //    .Select(edge => new IntPair(edge.otherKey, edge.key))
-                //    .Concat(input.Select(edge => new IntPair(edge.key, edge.otherKey)));
+                    // symmetrize the graph
+                    var edges = input
+                        .Select(edge => new IntPair(edge.otherKey, edge.key))
+                        .Concat(input.Select(edge => new IntPair(edge.key, edge.otherKey)));
 
-                //// prioritization introduces labels from small to large (in batches).
-                //var cc = nodes.Where(x => false)
-                //            .FixedPoint(
-                //                (lc, x) => x
-                //                    .Join(edges.EnterLoop(lc), n => n.s, e => e.s, (n, e) => new IntPair(e.t, n.t))
-                //                    .Concat(nodes.EnterLoop(lc))
-                //                    .Min(n => n.s, n => n.t),
-                //                n => n.s,
-                //                Int32.MaxValue);
+                    // prioritization introduces labels from small to large (in batches).
+                    var cc = nodes
+                            .Where(x => false)
+                            .FixedPoint(
+                                (lc, x) => x
+                                    .Join(edges.EnterLoop(lc), n => n.s, e => e.s, (n, e) => new IntPair(e.t, n.t))
+                                    .Concat(nodes.EnterLoop(lc))
+                                    .Min(n => n.s, n => n.t),
+                                n => n.s,
+                                Int32.MaxValue);
 
-                //var doneCC = input.Join(cc, r => r.key, c => c.s, (r, c) => FillFromCC(r, c));
-                //var unique = doneCC.Max(r => r.key, r => r.EntryTicks).Consolidate();
-                //return unique;
+                    var doneCC = input.Join(cc, r => r.key, c => c.s, (r, c) => FillFromCC(r, c));
+                    var unique = doneCC.Max(r => r.key, r => r.EntryTicks).Consolidate();
+                    return unique;
+                }
             }
 
             public int reduceStage;
@@ -1156,7 +1160,7 @@ namespace FaultToleranceExamples
                                     }
                                 }).AsCollection(false);
 
-                            cc = this.Compute(asCollection);
+                            cc = this.Compute(computation, asCollection);
 
                             ccWindow = this.TimeWindow(reduced, ccPlacement.Count);
 

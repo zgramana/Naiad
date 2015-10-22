@@ -783,7 +783,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
             Func<Microsoft.Research.Naiad.Dataflow.Iteration.LoopContext<T>, Collection<R, IterationIn<T>>, Collection<R, IterationIn<T>>> f, // (lc, x) => f(x)
             Func<R, int> priorityFunction,
             Expression<Func<R, K>> partitionedBy,
-            int maxIterations)
+            int maxIterations, CheckpointType delayCheckpoint)
         {
             if (priorityFunction == null)
                 throw new ArgumentNullException("priorityFunction");
@@ -794,6 +794,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
 
             // probably doesn't work correctly when max + pri >= 2^31. Fix!
             var delayVertex = fp.Delay(compiled, maxIterations);
+            delayVertex.Output.SetCheckpointType(delayCheckpoint);
 
             // consider partitioning first, to ensure even boring work is distributed
             var ingress = fp.EnterLoop(this.Output, x => priorityFunction(x.record))
@@ -834,7 +835,15 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
         }
         public Collection<R, T> FixedPoint<K>(
             Func<Microsoft.Research.Naiad.Dataflow.Iteration.LoopContext<T>,
-            Collection<R, IterationIn<T>>, Collection<R, IterationIn<T>>> f, Expression<Func<R, K>> consolidateFunction, int maxIterations)
+            Collection<R, IterationIn<T>>, Collection<R, IterationIn<T>>> f, Expression<Func<R, K>> consolidateFunction,
+            int maxIterations)
+        {
+            return this.FixedPoint(f, consolidateFunction, maxIterations, CheckpointType.Stateless);
+        }
+        public Collection<R, T> FixedPoint<K>(
+            Func<Microsoft.Research.Naiad.Dataflow.Iteration.LoopContext<T>,
+            Collection<R, IterationIn<T>>, Collection<R, IterationIn<T>>> f, Expression<Func<R, K>> consolidateFunction,
+            int maxIterations, CheckpointType delayCheckpoint)
         {
             if (f == null)
                 throw new ArgumentNullException("f");
@@ -844,6 +853,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
             var fp = new Microsoft.Research.Naiad.Dataflow.Iteration.LoopContext<T>(this.Context);
 
             var delay = fp.Delay<Weighted<R>>(compiled, maxIterations);
+            delay.Output.SetCheckpointType(delayCheckpoint);
 
             var ingress = fp.EnterLoop<Weighted<R>>(this.Output).ToCollection()
                 .PartitionBy(consolidateFunction);                              // add coordinate and ensure partitioned appropriately.

@@ -89,7 +89,7 @@ namespace Microsoft.Research.Naiad.Examples.DifferentialDataflow
                                                            .Concat(nodes.EnterLoop(lc, priority))
                                                            .Min(node => node.name, n => n.label, (s, t) => t, (s, t) => new SCC.Node(s, t), true)
                                                            .AssumePartitionedBy(node => node.name),
-                                           priority, node => node.name, Int32.MaxValue);
+                                           priority, node => node.name, Int32.MaxValue, Runtime.FaultTolerance.CheckpointType.Stateless);
         }
 
         #endregion

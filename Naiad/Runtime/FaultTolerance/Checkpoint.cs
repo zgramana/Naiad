@@ -1455,9 +1455,11 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
     /// <summary>
     /// A checkpoint policy that makes a new checkpoint every epoch
     /// </summary>
-    public class CheckpointAtEpoch : ICheckpointPolicy
+    public class CheckpointAtEpoch<T> : ICheckpointPolicy
+        where T : struct, Time<T>
     {
-        private int lastCheckpointEpoch;
+        private T? lastCheckpointTime;
+        private readonly int timeDigits;
 
         /// <summary>
         /// Called when the system might checkpoint a vertex.
@@ -1472,20 +1474,28 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                 throw new ApplicationException("Unexpected frontier");
             }
 
-            if (newFrontier[0].Timestamp[0] != lastCheckpointEpoch)
+            Pointstamp stamp = newFrontier[0];
+            T newTime = default(T).InitializeFrom(stamp, this.timeDigits);
+            if (!this.lastCheckpointTime.HasValue || !newTime.LessThan(this.lastCheckpointTime.Value))
             {
-                if (newFrontier[0].Timestamp[0] < lastCheckpointEpoch)
+                if (stamp.Timestamp.Length == this.timeDigits)
                 {
-                    throw new ApplicationException("Epochs out of order");
+                    return newFrontier;
                 }
 
-                // checkpoint at the first time in the frontier regardless of when we got called
-                for (int i=1; i<newFrontier[0].Timestamp.Length; ++i)
+                // zero out the low-order coordinates
+                for (int i=this.timeDigits; i<stamp.Timestamp.Length; ++i)
                 {
-                    newFrontier[i].Timestamp[i] = 0;
+                    stamp.Timestamp[i] = 0;
                 }
 
-                return newFrontier;
+                // then go for the max value of the preceding batch
+                FTFrontier frontier = FTFrontier.SetBelow(stamp);
+                if (frontier.Empty)
+                {
+                    return new Pointstamp[0];
+                }
+                return frontier.ToPointstamps(stamp);
             }
             else
             {
@@ -1501,7 +1511,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         {
             if (lastFrontier.Length == 0)
             {
-                this.lastCheckpointEpoch = -1;
+                this.lastCheckpointTime = null;
             }
             else
             {
@@ -1510,7 +1520,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                     throw new ApplicationException("Unexpected frontier");
                 }
 
-                this.lastCheckpointEpoch = lastFrontier[0].Timestamp[0];
+                this.lastCheckpointTime = default(T).InitializeFrom(lastFrontier[0], this.timeDigits);
             }
         }
 
@@ -1528,9 +1538,10 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         /// <summary>
         /// Create a new policy that checkpoints every new epoch
         /// </summary>
-        public CheckpointAtEpoch()
+        public CheckpointAtEpoch(int timeDigits)
         {
-            this.lastCheckpointEpoch = -1;
+            this.lastCheckpointTime = null;
+            this.timeDigits = timeDigits;
         }
     }
 

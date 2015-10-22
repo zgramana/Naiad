@@ -58,7 +58,7 @@ namespace Microsoft.Research.Naiad.Examples.DifferentialDataflow
                                                              .Min(n => n.s, n => n.t),
                                             priorityFunction,
                                             n => n.s,
-                                            Int32.MaxValue);
+                                            Int32.MaxValue, Runtime.FaultTolerance.CheckpointType.Stateless);
         }
     }
 

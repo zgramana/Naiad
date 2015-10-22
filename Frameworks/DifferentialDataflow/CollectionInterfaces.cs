@@ -709,13 +709,14 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
         /// <param name="iterationSelector">Function that maps an input record to the iteration at which that record should be introduced.</param>
         /// <param name="keySelector">Function that extracts a key from each record, to be used for partitioning the input collection.</param>
         /// <param name="maxIterations">The maximum number of iterations to compute.</param>
+        /// <param name="delayCheckpoint">The checjpoint style to use for the delay vertex</param>
         /// <returns>The result of applying a subquery g to this collection <paramref name="maxIterations"/> times,
         /// where g^{i+1} = f(g^i + input.EnterLoop(iterationSelector)^i).</returns>
         Collection<TRecord, TTime> GeneralFixedPoint<TKey>(
             Func<Microsoft.Research.Naiad.Dataflow.Iteration.LoopContext<TTime>, Collection<TRecord, IterationIn<TTime>>, Collection<TRecord, IterationIn<TTime>>> f, // (lc, initial, x) => f(x)
             Func<TRecord, int> iterationSelector,
             Expression<Func<TRecord, TKey>> keySelector,
-            int maxIterations);
+            int maxIterations, CheckpointType delayCheckpoint);
 
         /// <summary>
         /// Computes the fixed point of the subquery <paramref name="f"/> applied to this collection.
@@ -758,6 +759,20 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
         Collection<TRecord, TTime> FixedPoint<TKey>(
             Func<Microsoft.Research.Naiad.Dataflow.Iteration.LoopContext<TTime>,
             Collection<TRecord, IterationIn<TTime>>, Collection<TRecord, IterationIn<TTime>>> f, Expression<Func<TRecord, TKey>> keySelector, int maxIterations);
+
+        /// <summary>
+        /// Computes the fixed point of the subquery <paramref name="f"/> applied to this collection.
+        /// </summary>
+        /// <typeparam name="TKey">The key type.</typeparam>
+        /// <param name="f">The subquery to apply iteratively.</param>
+        /// <param name="keySelector">Function that extracts a key from each record, to be used for partitioning the input collection.</param>
+        /// <param name="maxIterations">The maximum number of iterations to compute.</param>
+        /// <param name="delayCheckpoint">The checkpointing style to adopt for the delay vertex</param>
+        /// <returns>The result of applying <paramref name="f"/> to this collection <paramref name="maxIterations"/> times, or until fixed point is reached, whichever is earlier.</returns>
+        Collection<TRecord, TTime> FixedPoint<TKey>(
+            Func<Microsoft.Research.Naiad.Dataflow.Iteration.LoopContext<TTime>,
+            Collection<TRecord, IterationIn<TTime>>, Collection<TRecord, IterationIn<TTime>>> f, Expression<Func<TRecord, TKey>> keySelector,
+            int maxIterations, CheckpointType delayCheckpoint);
         #endregion Fixed Point
 
         #region Monitoring
