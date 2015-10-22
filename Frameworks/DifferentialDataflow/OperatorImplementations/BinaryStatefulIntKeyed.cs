@@ -714,6 +714,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.OperatorImple
             if (!this.isShutdown)
             {
                 LatticeInternTable<T> newInternTable = new LatticeInternTable<T>();
+                bool[] usedTimes = new bool[this.internTable.count];
 
                 for (int outerKeys = 0; outerKeys < this.keyIndices.Length; ++outerKeys)
                 {
@@ -730,11 +731,37 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.OperatorImple
                             this.outputTrace.EnsureStateIsCurrentWRTAdvancedTimes(ref indices.output);
                             this.keyIndices[outerKeys][innerKeys] = indices;
 
-                            this.inputTrace1.TransferTimesToNewInternTable(indices.processed1, t => newInternTable.Intern(this.internTable.times[t]));
-                            this.inputTrace1.TransferTimesToNewInternTable(indices.unprocessed1, t => newInternTable.Intern(this.internTable.times[t]));
-                            this.inputTrace2.TransferTimesToNewInternTable(indices.processed2, t => newInternTable.Intern(this.internTable.times[t]));
-                            this.inputTrace2.TransferTimesToNewInternTable(indices.unprocessed2, t => newInternTable.Intern(this.internTable.times[t]));
-                            this.outputTrace.TransferTimesToNewInternTable(indices.output, t => newInternTable.Intern(this.internTable.times[t]));
+                            this.inputTrace1.MarkUsedTimes(indices.processed1, usedTimes);
+                            this.inputTrace1.MarkUsedTimes(indices.unprocessed1, usedTimes);
+                            this.inputTrace2.MarkUsedTimes(indices.processed2, usedTimes);
+                            this.inputTrace2.MarkUsedTimes(indices.unprocessed2, usedTimes);
+                            this.outputTrace.MarkUsedTimes(indices.output, usedTimes);
+                        }
+                    }
+                }
+
+                int[] transferTime = new int[this.internTable.count];
+                for (int i = 0; i < this.internTable.count; ++i)
+                {
+                    if (usedTimes[i])
+                    {
+                        transferTime[i] = newInternTable.Intern(this.internTable.times[i]);
+                    }
+                }
+
+                for (int outerKeys = 0; outerKeys < this.keyIndices.Length; ++outerKeys)
+                {
+                    if (this.keyIndices[outerKeys] != null)
+                    {
+                        for (int innerKeys = 0; innerKeys < this.keyIndices[outerKeys].Length; ++innerKeys)
+                        {
+                            int index = (outerKeys * 65536) + innerKeys;
+                            BinaryKeyIndices indices = this.keyIndices[outerKeys][innerKeys];
+                            this.inputTrace1.TransferTimesToNewInternTable(indices.processed1, transferTime);
+                            this.inputTrace1.TransferTimesToNewInternTable(indices.unprocessed1, transferTime);
+                            this.inputTrace2.TransferTimesToNewInternTable(indices.processed2, transferTime);
+                            this.inputTrace2.TransferTimesToNewInternTable(indices.unprocessed2, transferTime);
+                            this.outputTrace.TransferTimesToNewInternTable(indices.output, transferTime);
                         }
                     }
                 }

@@ -60,6 +60,17 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow
                 && this.output == other.output;
         }
 
+        public bool IsEmpty
+        {
+            get
+            {
+                return
+                    unprocessed1 == 0 && processed1 == 0 &&
+                    unprocessed2 == 0 && processed2 == 0 &&
+                    output == 0;
+            }
+        }
+
         public BinaryKeyIndices(int u1, int u2, int p1, int p2, int r) { unprocessed1 = u1; unprocessed2 = u2; processed1 = p1; processed2 = p2; output = r; }
     }
 

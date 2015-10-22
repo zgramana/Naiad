@@ -193,6 +193,13 @@ namespace Microsoft.Research.Naiad
     }
 
     /// <summary>
+    /// Object used to temporarily override the default checkpoint policy for a computation
+    /// </summary>
+    public interface TemporaryCheckpointPolicy : IDisposable
+    {
+    }
+
+    /// <summary>
     /// Manages the construction and execution of an individual dataflow computation.
     /// </summary>
     /// <remarks>
@@ -470,6 +477,7 @@ namespace Microsoft.Research.Naiad
         int Register(Dataflow.Edge edge);
 
         Placement DefaultPlacement { get; }
+        Func<int, ICheckpointPolicy> DefaultCheckpointPolicy { get; }
 
         void SignalShutdown();
 
@@ -834,6 +842,33 @@ namespace Microsoft.Research.Naiad
             Placement previous = this.defaultPlacement;
             this.defaultPlacement = scopedPlacement;
             return new OverridePlacement(previous, this);
+        }
+
+        private Func<int, ICheckpointPolicy> defaultCheckpointPolicy;
+        public Func<int, ICheckpointPolicy> DefaultCheckpointPolicy { get { return this.defaultCheckpointPolicy; } }
+
+        private class OverrideCheckpointPolicy : TemporaryCheckpointPolicy
+        {
+            private readonly Func<int, ICheckpointPolicy> previousCheckpointPolicy;
+            private readonly BaseComputation parent;
+
+            public void Dispose()
+            {
+                this.parent.defaultCheckpointPolicy = this.previousCheckpointPolicy;
+            }
+
+            public OverrideCheckpointPolicy(Func<int, ICheckpointPolicy> previousPolicy, BaseComputation parent)
+            {
+                this.previousCheckpointPolicy = previousPolicy;
+                this.parent = parent;
+            }
+        }
+
+        public TemporaryCheckpointPolicy WithCheckpointPolicy(Func<int, ICheckpointPolicy> scopedCheckpointPolicy)
+        {
+            Func<int, ICheckpointPolicy> previous = this.defaultCheckpointPolicy;
+            this.defaultCheckpointPolicy = scopedCheckpointPolicy;
+            return new OverrideCheckpointPolicy(previous, this);
         }
 
         public StreamContext Context { get { return new StreamContext(this); } }

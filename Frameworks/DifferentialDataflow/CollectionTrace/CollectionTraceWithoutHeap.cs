@@ -443,7 +443,22 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
             }
         }
 
-        public void TransferTimesToNewInternTable(int offsetLength, Func<int, int> transferTime)
+        public void MarkUsedTimes(int offsetLength, bool[] usedTimes)
+        {
+            var ol = new OffsetLength(offsetLength);
+
+            if (!ol.IsEmpty)
+            {
+                var handle = increments.Dereference(ol);
+                for (int i = 0; i < handle.Length; i++)
+                    if (!handle.Array[handle.Offset + i].IsEmpty)
+                    {
+                        usedTimes[handle.Array[handle.Offset + i].TimeIndex] = true;
+                    }
+            }
+        }
+
+        public void TransferTimesToNewInternTable(int offsetLength, int[] transferTime)
         {
             var ol = new OffsetLength(offsetLength);
 
@@ -455,7 +470,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
                 {
                     if (handle.Array[handle.Offset + i].Weight != 0)
                     {
-                        handle.Array[handle.Offset + i].TimeIndex = transferTime(handle.Array[handle.Offset + i].TimeIndex);
+                        handle.Array[handle.Offset + i].TimeIndex = transferTime[handle.Array[handle.Offset + i].TimeIndex];
                     }
                 }
             }

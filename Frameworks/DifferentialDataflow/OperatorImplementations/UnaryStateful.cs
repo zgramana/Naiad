@@ -566,6 +566,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.OperatorImple
             if (!this.isShutdown)
             {
                 LatticeInternTable<T> newInternTable = new LatticeInternTable<T>();
+                bool[] usedTimes = new bool[this.internTable.count];
 
                 foreach (var key in this.keyIndices.Keys.ToArray())
                 {
@@ -573,11 +574,32 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.OperatorImple
                     this.inputTrace.EnsureStateIsCurrentWRTAdvancedTimes(ref indices.processed);
                     this.inputTrace.EnsureStateIsCurrentWRTAdvancedTimes(ref indices.unprocessed);
                     this.outputTrace.EnsureStateIsCurrentWRTAdvancedTimes(ref indices.output);
-                    this.keyIndices[key] = indices;
+                    if (indices.IsEmpty)
+                        this.keyIndices.Remove(key);
+                    else
+                    {
+                        this.keyIndices[key] = indices;
 
-                    this.inputTrace.TransferTimesToNewInternTable(indices.processed, t => newInternTable.Intern(this.internTable.times[t]));
-                    this.inputTrace.TransferTimesToNewInternTable(indices.unprocessed, t => newInternTable.Intern(this.internTable.times[t]));
-                    this.outputTrace.TransferTimesToNewInternTable(indices.output, t => newInternTable.Intern(this.internTable.times[t]));
+                        this.inputTrace.MarkUsedTimes(indices.processed, usedTimes);
+                        this.inputTrace.MarkUsedTimes(indices.unprocessed, usedTimes);
+                        this.outputTrace.MarkUsedTimes(indices.output, usedTimes);
+                    }
+                }
+
+                int[] transferTime = new int[this.internTable.count];
+                for (int i=0; i<this.internTable.count; ++i)
+                {
+                    if (usedTimes[i])
+                    {
+                        transferTime[i] = newInternTable.Intern(this.internTable.times[i]);
+                    }
+                }
+
+                foreach (var indices in this.keyIndices.Values)
+                {
+                    this.inputTrace.TransferTimesToNewInternTable(indices.processed, transferTime);
+                    this.inputTrace.TransferTimesToNewInternTable(indices.unprocessed, transferTime);
+                    this.outputTrace.TransferTimesToNewInternTable(indices.output, transferTime);
                 }
 
                 this.inputTrace.InstallNewUpdateFunction((t1, t2) => newInternTable.LessThan(t1, t2), t => newInternTable.UpdateTime(t));
@@ -1170,6 +1192,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.OperatorImple
             if (!this.isShutdown)
             {
                 LatticeInternTable<T> newInternTable = new LatticeInternTable<T>();
+                bool[] usedTimes = new bool[this.internTable.count];
 
                 foreach (var key in this.keyIndices.Keys.ToArray())
                 {
@@ -1177,11 +1200,32 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.OperatorImple
                     this.inputTrace.EnsureStateIsCurrentWRTAdvancedTimes(ref indices.processed);
                     this.inputTrace.EnsureStateIsCurrentWRTAdvancedTimes(ref indices.unprocessed);
                     this.outputTrace.EnsureStateIsCurrentWRTAdvancedTimes(ref indices.output);
-                    this.keyIndices[key] = indices;
+                    if (indices.IsEmpty)
+                        this.keyIndices.Remove(key);
+                    else
+                    {
+                        this.keyIndices[key] = indices;
 
-                    this.inputTrace.TransferTimesToNewInternTable(indices.processed, t => newInternTable.Intern(this.internTable.times[t]));
-                    this.inputTrace.TransferTimesToNewInternTable(indices.unprocessed, t => newInternTable.Intern(this.internTable.times[t]));
-                    this.outputTrace.TransferTimesToNewInternTable(indices.output, t => newInternTable.Intern(this.internTable.times[t]));
+                        this.inputTrace.MarkUsedTimes(indices.processed, usedTimes);
+                        this.inputTrace.MarkUsedTimes(indices.unprocessed, usedTimes);
+                        this.outputTrace.MarkUsedTimes(indices.output, usedTimes);
+                    }
+                }
+
+                int[] transferTime = new int[this.internTable.count];
+                for (int i = 0; i < this.internTable.count; ++i)
+                {
+                    if (usedTimes[i])
+                    {
+                        transferTime[i] = newInternTable.Intern(this.internTable.times[i]);
+                    }
+                }
+
+                foreach (var indices in this.keyIndices.Values)
+                {
+                    this.inputTrace.TransferTimesToNewInternTable(indices.processed, transferTime);
+                    this.inputTrace.TransferTimesToNewInternTable(indices.unprocessed, transferTime);
+                    this.outputTrace.TransferTimesToNewInternTable(indices.output, transferTime);
                 }
 
                 this.inputTrace.InstallNewUpdateFunction((t1, t2) => newInternTable.LessThan(t1, t2), t => newInternTable.UpdateTime(t));

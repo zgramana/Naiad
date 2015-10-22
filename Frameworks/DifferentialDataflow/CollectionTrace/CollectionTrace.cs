@@ -126,11 +126,18 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
         void EnsureStateIsCurrentWRTAdvancedTimes(ref int keyIndex);
 
         /// <summary>
+        /// Set to true any time used by the key
+        /// </summary>
+        /// <param name="keyIndex">The index for the key to update.</param>
+        /// <param name="usedTimes">An array of interned times that are used: the relevant element gets set for every time used after update</param>
+        void MarkUsedTimes(int keyIndex, bool[] usedTimes);
+
+        /// <summary>
         /// Updates the state associated with the given key to reflect a new compacted intern table
         /// </summary>
         /// <param name="keyIndex">The index for the key to update.</param>
         /// <param name="transferTime">The function that translates an old time index into a new time index.</param>
-        void TransferTimesToNewInternTable(int keyIndex, Func<int, int> transferTime);
+        void TransferTimesToNewInternTable(int keyIndex, int[] transferTime);
 
         /// <summary>
         /// Updates the state associated with the given key to remove all elements whose time does not match
@@ -391,7 +398,12 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
         {
         }
 
-        public void TransferTimesToNewInternTable(int state, Func<int, int> updateTime)
+        public void MarkUsedTimes(int state, bool[] usedTimes)
+        {
+            usedTimes[0] = true;
+        }
+
+        public void TransferTimesToNewInternTable(int state, int[] updateTime)
         {
         }
 
@@ -605,7 +617,12 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
         {
         }
 
-        public void TransferTimesToNewInternTable(int state, Func<int, int> updateTime)
+        public void MarkUsedTimes(int keyIndex, bool[] usedTimes)
+        {
+            usedTimes[0] = true;
+        }
+
+        public void TransferTimesToNewInternTable(int state, int[] updateTime)
         {
         }
 

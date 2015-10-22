@@ -150,6 +150,7 @@ namespace Microsoft.Research.Naiad.Dataflow
             // the number of entries in the last checkpoint
             this.IncrementalCheckpointRatio = 0.2;
             this.CheckpointType = CheckpointType.Logging;
+            this.CheckpointPolicyFactory = internalComputation.DefaultCheckpointPolicy;
             this.internalComputation = internalComputation;
             this.targets = new List<Edge>();
             this.sources = new List<Edge>();

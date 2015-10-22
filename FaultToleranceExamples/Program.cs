@@ -1076,28 +1076,29 @@ namespace FaultToleranceExamples
 
             private Collection<Record, BatchIn<Epoch>> Compute(Collection<Record, BatchIn<Epoch>> input)
             {
-                // initial labels only needed for min, as the max will be improved on anyhow.
-                var nodes = input.Select(x => new IntPair(Math.Min(x.key, x.otherKey), Math.Min(x.key, x.otherKey)))
-                                 .Consolidate();
+                return input;
+                //// initial labels only needed for min, as the max will be improved on anyhow.
+                //var nodes = input.Select(x => new IntPair(Math.Min(x.key, x.otherKey), Math.Min(x.key, x.otherKey)))
+                //                 .Consolidate();
 
-                // symmetrize the graph
-                var edges = input
-                    .Select(edge => new IntPair(edge.otherKey, edge.key))
-                    .Concat(input.Select(edge => new IntPair(edge.key, edge.otherKey)));
+                //// symmetrize the graph
+                //var edges = input
+                //    .Select(edge => new IntPair(edge.otherKey, edge.key))
+                //    .Concat(input.Select(edge => new IntPair(edge.key, edge.otherKey)));
 
-                // prioritization introduces labels from small to large (in batches).
-                var cc = nodes.Where(x => false)
-                            .FixedPoint(
-                                (lc, x) => x
-                                    .Join(edges.EnterLoop(lc), n => n.s, e => e.s, (n, e) => new IntPair(e.t, n.t))
-                                    .Concat(nodes.EnterLoop(lc))
-                                    .Min(n => n.s, n => n.t),
-                                n => n.s,
-                                Int32.MaxValue);
+                //// prioritization introduces labels from small to large (in batches).
+                //var cc = nodes.Where(x => false)
+                //            .FixedPoint(
+                //                (lc, x) => x
+                //                    .Join(edges.EnterLoop(lc), n => n.s, e => e.s, (n, e) => new IntPair(e.t, n.t))
+                //                    .Concat(nodes.EnterLoop(lc))
+                //                    .Min(n => n.s, n => n.t),
+                //                n => n.s,
+                //                Int32.MaxValue);
 
-                var doneCC = input.Join(cc, r => r.key, c => c.s, (r, c) => FillFromCC(r, c));
-                var unique = doneCC.Max(r => r.key, r => r.EntryTicks).Consolidate();
-                return unique;
+                //var doneCC = input.Join(cc, r => r.key, c => c.s, (r, c) => FillFromCC(r, c));
+                //var unique = doneCC.Max(r => r.key, r => r.EntryTicks).Consolidate();
+                //return unique;
             }
 
             public int reduceStage;
@@ -1613,7 +1614,7 @@ namespace FaultToleranceExamples
         static private int slowBatchTime = 20000;
         static private int htBatchSize = 10;
         static private int htSleepTime = 1000;
-        static private int htInitialBatches = 100;
+        static private int htInitialBatches = 10;
 #else
         static private int slowBase = 0;
         static private int slowRange = 1;
@@ -1647,6 +1648,7 @@ namespace FaultToleranceExamples
             FTManager manager = new FTManager();
 
             Configuration conf = Configuration.FromArgs(ref args);
+            conf.MaxLatticeInternStaleTimes = 10;
             this.processId = conf.ProcessID;
             this.processes = conf.Processes;
             Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
@@ -1728,7 +1730,7 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
-                        //System.Threading.Thread.Sleep(Timeout.Infinite);
+                        System.Threading.Thread.Sleep(Timeout.Infinite);
                         System.Threading.Thread.Sleep(15000);
                         if (conf.Processes > 2)
                         {

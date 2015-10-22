@@ -74,7 +74,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.Operators
         }
 
         public ToStateless(int index, Stage<T> collection, bool inputImmutable)
-            : base(index, collection, inputImmutable, v => v, v => v)
+            : base(index, collection, inputImmutable, v => v, v => v, false)
         {
         }
     }

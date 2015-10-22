@@ -356,6 +356,40 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
                 }
         }
 
+        int CompactRecords(ref OffsetLength offsetLength)
+        {
+            if (offsetLength.IsEmpty)
+            {
+                return 0;
+            }
+
+            int nonZeroRecords = 0;
+            var handle = records.Dereference(offsetLength);
+            for (int i=0; i<handle.Length; ++i)
+            {
+                if (handle.Array[handle.Offset + i].weight != 0)
+                {
+                    ++nonZeroRecords;
+                }
+            }
+
+            if (nonZeroRecords == 0)
+            {
+                records.Release(ref offsetLength);
+                return 0;
+            }
+
+            if (nonZeroRecords * 2 < offsetLength.Length)
+            {
+                OffsetLength newOffsetLength = new OffsetLength(0);
+                IntroduceRecords(ref newOffsetLength, offsetLength, 1);
+                records.Release(ref offsetLength);
+                offsetLength = newOffsetLength;
+            }
+
+            return nonZeroRecords;
+        }
+
         void IntroduceRecords(ref OffsetLength thisOffsetLength, OffsetLength thatOffsetLength, int scale)
         {
             if (thisOffsetLength.IsEmpty)
@@ -802,12 +836,14 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
 
                 var position = 0;
                 for (int i = 0; i < handle.Length; i++)
+                {
                     if (!handle.Array[handle.Offset + i].IsEmpty)
                     {
                         var temp = handle.Array[handle.Offset + i];
                         handle.Array[handle.Offset + i] = new CollectionTraceWithHeapIncrement();
                         handle.Array[handle.Offset + (position++)] = temp;
                     }
+                }
 
                 if (handle.Array[handle.Offset].IsEmpty)
                     increments.Release(ref ol);
@@ -816,7 +852,22 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
             }
         }
 
-        public void TransferTimesToNewInternTable(int offsetLength, Func<int, int> transferTime)
+        public void MarkUsedTimes(int offsetLength, bool[] usedTimes)
+        {
+            var ol = new OffsetLength(offsetLength);
+
+            if (!ol.IsEmpty)
+            {
+                var handle = increments.Dereference(ol);
+                for (int i = 0; i < handle.Length; i++)
+                    if (!handle.Array[handle.Offset + i].IsEmpty)
+                    {
+                        usedTimes[handle.Array[handle.Offset + i].TimeIndex] = true;
+                    }
+            }
+        }
+
+        public void TransferTimesToNewInternTable(int offsetLength, int[] transferTime)
         {
             var ol = new OffsetLength(offsetLength);
 
@@ -828,7 +879,7 @@ namespace Microsoft.Research.Naiad.Frameworks.DifferentialDataflow.CollectionTra
                 {
                     if (!handle.Array[handle.Offset + i].IsEmpty)
                     {
-                        handle.Array[handle.Offset + i].TimeIndex = transferTime(handle.Array[handle.Offset + i].TimeIndex);
+                        handle.Array[handle.Offset + i].TimeIndex = transferTime[handle.Array[handle.Offset + i].TimeIndex];
                     }
                 }
             }
