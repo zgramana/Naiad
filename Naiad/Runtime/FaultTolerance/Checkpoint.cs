@@ -1453,9 +1453,9 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
     }
 
     /// <summary>
-    /// A checkpoint policy that makes a new checkpoint every epoch
+    /// A checkpoint policy that makes a new checkpoint every batch
     /// </summary>
-    public class CheckpointAtEpoch<T> : ICheckpointPolicy
+    public class CheckpointAtBatch<T> : ICheckpointPolicy
         where T : struct, Time<T>
     {
         private T? lastCheckpointTime;
@@ -1475,12 +1475,28 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
             }
 
             Pointstamp stamp = newFrontier[0];
+
             T newTime = default(T).InitializeFrom(stamp, this.timeDigits);
             if (!this.lastCheckpointTime.HasValue || !newTime.LessThan(this.lastCheckpointTime.Value))
             {
                 if (stamp.Timestamp.Length == this.timeDigits)
                 {
                     return newFrontier;
+                }
+
+                // round up if we're at a max inner coordinate
+                for (int i = stamp.Timestamp.Length; i > 0; --i)
+                {
+                    if (stamp.Timestamp[i - 1] == Int32.MaxValue)
+                    {
+                        stamp.Timestamp[i - 1] = 0;
+                        // continue to the next outer coordinate
+                    }
+                    else
+                    {
+                        ++stamp.Timestamp[i - 1];
+                        break;
+                    }
                 }
 
                 // zero out the low-order coordinates
@@ -1538,7 +1554,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         /// <summary>
         /// Create a new policy that checkpoints every new epoch
         /// </summary>
-        public CheckpointAtEpoch(int timeDigits)
+        public CheckpointAtBatch(int timeDigits)
         {
             this.lastCheckpointTime = null;
             this.timeDigits = timeDigits;

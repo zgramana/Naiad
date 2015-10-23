@@ -1077,7 +1077,7 @@ namespace FaultToleranceExamples
             private Collection<Record, BatchIn<Epoch>> Compute(Computation computation, Collection<Record, BatchIn<Epoch>> input)
             {
                 //return input;
-                using (var cp = computation.WithCheckpointPolicy(v => new CheckpointAtEpoch<BatchIn<Epoch>>(2)))
+                using (var cp = computation.WithCheckpointPolicy(v => new CheckpointAtBatch<BatchIn<Epoch>>(2)))
                 {
                     // initial labels only needed for min, as the max will be improved on anyhow.
                     var nodes = input.Select(x => new IntPair(Math.Min(x.key, x.otherKey), Math.Min(x.key, x.otherKey)))
@@ -1677,7 +1677,7 @@ namespace FaultToleranceExamples
                 conf.CheckpointingFactory = s => new FileStreamSequence("checkpoint", s);
             }
 
-            conf.DefaultCheckpointInterval = 5000;
+            conf.DefaultCheckpointInterval = 1000;
 
             using (var computation = NewComputation.FromConfig(conf))
             {
