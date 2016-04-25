@@ -1,0 +1,23 @@
+﻿{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "vmssName": {
+            "value": "naiadsmall"
+        },
+        "instanceCount": {
+            "value": 40
+        },
+        "adminUsername": {
+            "value": "misard"
+        },
+        "adminPassword": {
+            "reference": {
+                "keyVault": {
+                    "id": "/subscriptions/7bb626fb-2c71-4ffe-a286-b4ed1774db57/resourceGroups/Naiad/providers/Microsoft.KeyVault/vaults/NaiadKeys"
+                },
+                "secretName": "AdminPassword"
+            }
+        }
+    }
+}

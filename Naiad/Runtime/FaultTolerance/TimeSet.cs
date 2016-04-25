@@ -339,12 +339,15 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
             }
         }
 
-        public void ExceptAll(int frontierNodeId, FTFrontier frontier)
+        public bool ExceptAll(int frontierNodeId, FTFrontier frontier)
         {
+            bool empty = true;
             for (int i = 0; i < this.set.Length; ++i)
             {
                 this.set[i] = this.set[i].ExceptTyped(this.set[i].NodeId, frontierNodeId, frontier);
+                empty = empty && this.set[i].Empty;
             }
+            return empty;
         }
 
         public bool TrySerialize(int frontierNodeId, FTFrontier upTo, FTFrontier lastCheckpoint, SendBufferPage buffer, SerializationFormat serializationFormat)

@@ -48,26 +48,15 @@ namespace Microsoft.Research.Naiad.Frameworks.Azure
     class NamespaceDoc
     { }
 
-    /// <summary>
-    /// Extension methods
-    /// </summary>
-    public static class ExtensionMethods
+    public static class Helpers
     {
         #region Default connection string.
 
         private const string DefaultConnectionString = "Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString";
 
-        /// <summary>
-        /// Returns the default <see cref="CloudStorageAccount"/> for this computation.
-        /// </summary>
-        /// <param name="computation">The computation.</param>
-        /// <returns>The default <see cref="CloudStorageAccount"/> for this computation.</returns>
-        /// <exception cref="ArgumentOutOfRangeException">Thrown when the <c>Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString</c> setting is not set or has more than one value in <see cref="Configuration.AdditionalSettings"/> 
-        /// </exception>
-        /// <exception cref="ArgumentOutOfRangeException">Thrown when the <c>Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString</c> setting cannot be parsed.</exception>
-        public static CloudStorageAccount DefaultAccount(this Computation computation)
+        public static CloudStorageAccount DefaultAccount(Configuration configuration)
         {
-            string[] connectionStrings = computation.Controller.Configuration.AdditionalSettings.GetValues(DefaultConnectionString);
+            string[] connectionStrings = configuration.AdditionalSettings.GetValues(DefaultConnectionString);
 
             if (connectionStrings == null)
                 throw new ArgumentOutOfRangeException("DefaultConnectionString not set");
@@ -85,6 +74,27 @@ namespace Microsoft.Research.Naiad.Frameworks.Azure
                 throw new ArgumentOutOfRangeException(string.Format("Invalid DefaultConnectionString: {0}", connectionStrings[0]));
 
             return ret;
+        }
+
+        #endregion
+    }
+
+    /// <summary>
+    /// Extension methods
+    /// </summary>
+    public static class ExtensionMethods
+    {
+        /// <summary>
+        /// Returns the default <see cref="CloudStorageAccount"/> for this computation.
+        /// </summary>
+        /// <param name="computation">The computation.</param>
+        /// <returns>The default <see cref="CloudStorageAccount"/> for this computation.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the <c>Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString</c> setting is not set or has more than one value in <see cref="Configuration.AdditionalSettings"/> 
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when the <c>Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString</c> setting cannot be parsed.</exception>
+        public static CloudStorageAccount DefaultAccount(this Computation computation)
+        {
+            return Helpers.DefaultAccount(computation.Controller.Configuration);
         }
 
         /// <summary>
@@ -105,8 +115,6 @@ namespace Microsoft.Research.Naiad.Frameworks.Azure
             container.CreateIfNotExists();
             return container;
         }
-
-        #endregion
 
         #region Azure file-reading extension methods
 

@@ -136,10 +136,33 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
 
                 foreach (KeyValuePair<int, Pair<Edge, Dictionary<T, TimeSetBundle<TMessage>>>> channel in this.discardedMessageTimes)
                 {
-                    Dictionary<T, TimeSetBundle<TMessage>> pruned = new Dictionary<T,TimeSetBundle<TMessage>>();
+                    Dictionary<T, TimeSetBundle<TMessage>> pruned = new Dictionary<T, TimeSetBundle<TMessage>>();
                     foreach (var bundle in channel.Value.Second.Where(b => frontier.Contains(b.Key.ToPointstamp(stageId))))
                     {
                         pruned.Add(bundle.Key, bundle.Value);
+                    }
+
+                    newTimes.Add(channel.Key, channel.Value.First.PairWith(pruned));
+                }
+
+                this.discardedMessageTimes = newTimes;
+            }
+
+            public void ExceptAll(int stageId, FTFrontier frontier)
+            {
+                Dictionary<int, Pair<Edge, Dictionary<T, TimeSetBundle<TMessage>>>> newTimes =
+                    new Dictionary<int, Pair<Edge, Dictionary<T, TimeSetBundle<TMessage>>>>();
+
+                foreach (KeyValuePair<int, Pair<Edge, Dictionary<T, TimeSetBundle<TMessage>>>> channel in this.discardedMessageTimes)
+                {
+                    Dictionary<T, TimeSetBundle<TMessage>> pruned = new Dictionary<T,TimeSetBundle<TMessage>>();
+                    foreach (var bundle in channel.Value.Second)
+                    {
+                        bool empty = bundle.Value.ExceptAll(stageId, frontier);
+                        if (!empty)
+                        {
+                            pruned.Add(bundle.Key, bundle.Value);
+                        }
                     }
 
                     newTimes.Add(channel.Key, channel.Value.First.PairWith(pruned));
@@ -1469,6 +1492,11 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         /// <returns>the beginning of the epoch of the frontier that was passed in if it is a new epoch since the last checkpoint, otherwise an empty list</returns>
         public Pointstamp[] ShouldCheckpointAt(Pointstamp[] newFrontier, bool isEagerCompletion)
         {
+            if (newFrontier.Length == 0)
+            {
+                return newFrontier;
+            }
+
             if (newFrontier.Length != 1)
             {
                 throw new ApplicationException("Unexpected frontier");

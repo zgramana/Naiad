@@ -1,29 +1,3 @@
-﻿Login-AzureRmAccount
-$accountInformation = Naiad-ConfigureAccounts "<put the resource group name here>"
-
-$guid = Naiad-PrepareJob "C:\users\MyName\Source\Repos\MySolution\bin\Release" $accountInformation
-
-# copy the job zip to all the VMs
-$deployJobs = Naiad-DeployJob $guid $accountInformation
-# and wait for it to complete
-Wait-Job $deployJobs -Timeout 10
-# and get the results
-$deployOutput = $deployJobs | ForEach-Object { Receive-Job -Job $_ } 
-
-# e.g. to run a particular job
-$executeJobs = Naiad-ExecuteJob $guid $accountInformation "MyProgram.exe" "MyFirstArge MySecondArg"
-
-$outputMap = @{}
-
-# get all the outputs, and show the output of the first process
-(0..($executeJobs.Length-1)) | ForEach-Object { $outputMap[$_] += (Receive-Job -Job $executeJobs[$_] 2>&1 | %{ "$_".TrimEnd() }) }
-$outputMap[0]
-
-# e.g. to see the order that process 25 in a job received shutdown messages from its peers
-$outputMap[25] | Select-String -AllMatches -Pattern "Received shutdown message from [0-9]+" | Select-Object -ExpandProperty Matches | Select-Object -ExpandProperty Value | sort 
-
-Naiad-StopAzureProcess Twiral $accountInformation
-
 Add-Type @'
 public class NaiadAccounts
 {
@@ -154,14 +128,15 @@ function Naiad-DeployJob
     }
 }
 
-
-
-function Naiad-OpenPort
+# update the powershell quotas on each VM to be allowed to use more than 1GB: otherwise powershell will silently kill any process that
+# exceeds this amount of memory
+function Naiad-PrepareVMs
 {
     [CmdletBinding()]
     param (
         [parameter(Mandatory=$true)]
         [NaiadAccounts]$accountInformation
+        
     )
     PROCESS {
 		$rg = $accountInformation.resourceGroupName;
@@ -169,24 +144,21 @@ function Naiad-OpenPort
 		$dnsName = (Get-AzureRmPublicIpAddress -ResourceGroupName $rg).DnsSettings.Fqdn;
         $portRules = (Get-AzureRmLoadBalancer -ResourceGroupName $rg).InboundNatRules | where -Property BackendPort -EQ 5986
 
-        $openJobs = @()
-        $portRules | ForEach-Object {
-			Invoke-Command -ScriptBlock { 
-				$port = New-Object -ComObject HNetCfg.FWOpenPort
-				$port.Port = 2101
-				$port.Name = 'Naiad port'
-				$port.Enabled = $true
+        $jobs = $portRules | ForEach-Object {
+			Invoke-Command -AsJob -ComputerName $dnsName -Port $_.FrontendPort -ScriptBlock {
+				netsh firewall add portopening TCP 2101 "Naiad"
 
-				$fwMgr = New-Object -ComObject HNetCfg.FwMgr
-				$profile = $fwMgr.LocalPolicy.CurrentProfile
-				$profile.GloballyOpenPorts.Add($port)
-				"done";
-			} -ComputerName $dnsName -Port $_.FrontendPort -UseSSL -AsJob -Credential $accountInformation.credential
-        }
+		        Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 16000 -Force
+			    Set-Item WSMan:\localhost\Plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 16000
+    
+			    Restart-Service winrm
+			} -Credential $accountInformation.credential -UseSSL -ArgumentList $processname
+		}
+
+        Wait-Job $jobs
+		Receive-Job $jobs
     }
 }
-
-
 
 # executes a Naiad job from a guid, account information, and executable string
 function Naiad-ExecuteJob
@@ -246,7 +218,7 @@ function Naiad-ExecuteJob
                 $argList = $additionalArguments.Split()
     
                 # augment the arguments with default Naiad args: you may want to edit this. It assumes 7 threads per process
-                $argList += @("-n", $mapping.Count, "-t", "1", "-p", $procID, "-h")
+                $argList += @("-n", $mapping.Count, "-t", "1", "-p", $procID, "--addsetting",  "Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString", $connectionString, "-h")
                 #$argList += @("-n", $mapping.Count, "-t", "7", "--addsetting",  "Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString", $connectionString, "--inlineserializer", "-p", $procID, "-h")
                 # supply the listener ports for all the processes in the job
                 (0..($mapping.Count-1)) | ForEach-Object { $argList += $mapping[$_].ipAddress + ":2101 " }
@@ -261,21 +233,6 @@ function Naiad-ExecuteJob
         }
     }
 }
-
-function Naiad-ConnectRemoteDesktop 
-{
-    [CmdletBinding()]
-    param (
-        [parameter(Mandatory=$true)]
-        [NaiadAccounts]$accountInformation,
-        [parameter(Mandatory=$true)]
-        [string]$hostname
-    )
-    PROCESS {
-        Get-AzureRemoteDesktopFile -ServiceName $accountInformation.cloudServiceName -Name $hostname -Launch
-    }
-}
-
 
 # stop all the processes with a given name on the VMs
 function Naiad-StopAzureProcess
@@ -306,42 +263,33 @@ function Naiad-GetAzureProcessMemory
 {
     [CmdletBinding()]
     param (
-
         [parameter(Mandatory=$true)]
         [string]$processname,
         [parameter(Mandatory=$true)]
         [NaiadAccounts]$accountInformation
-        
-    )
+	)
     PROCESS {
+		$rg = $accountInformation.resourceGroupName;
 
-        $uris = Get-AzureWinRMUri -ServiceName $accountInformation.cloudServiceName 
-        $jobs = $uris | ForEach-Object { Invoke-Command -AsJob -ConnectionUri $_ -ScriptBlock { (Get-Process -Name $args[0]).PagedMemorySize64 } -Credential $accountInformation.credential -SessionOption (New-PSSessionOption -SkipCACheck) -ArgumentList $processname }
+		$dnsName = (Get-AzureRmPublicIpAddress -ResourceGroupName $rg).DnsSettings.Fqdn;
+        $portRules = (Get-AzureRmLoadBalancer -ResourceGroupName $rg).InboundNatRules | where -Property BackendPort -EQ 5986
+
+        $jobs = $portRules | ForEach-Object { Invoke-Command -AsJob -ComputerName $dnsName -Port $_.FrontendPort -ScriptBlock { (Get-Process -Name $args[0]).PagedMemorySize64 } -Credential $accountInformation.credential -UseSSL -ArgumentList $processname }
 
         Wait-Job $jobs
     }
 }
 
-
-# identify the blob uri, and the uris which will want it
-$cloudService = "<put cloud service name here>"
-$uris = Get-AzureWinRMUri -ServiceName $cloudService 
-
-# update the powershell quotas on each VM to be allowed to use more than 1GB: otherwise powershell will silently kill any process that
-# exceeds this amount of memory
-$configureJobs = @()
-$uris | ForEach-Object {
-    $configureJobs += Invoke-Command -ScriptBlock {
-
-        # netsh firewall add portopening TCP 2101 "Naiad"
-
-        Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 16000 -Force
-        Set-Item WSMan:\localhost\Plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 16000
-    
-        Restart-Service winrm
-    
-    } -AsJob -ConnectionUri $_ -Credential $credential -SessionOption (New-PSSessionOption -SkipCACheck)
+function Naiad-ConnectRemoteDesktop 
+{
+    [CmdletBinding()]
+    param (
+        [parameter(Mandatory=$true)]
+        [NaiadAccounts]$accountInformation,
+        [parameter(Mandatory=$true)]
+        [string]$hostname
+    )
+    PROCESS {
+        Get-AzureRemoteDesktopFile -ServiceName $accountInformation.cloudServiceName -Name $hostname -Launch
+    }
 }
-
-Wait-Job $configureJobs
-Receive-Job -Job $configureJobs

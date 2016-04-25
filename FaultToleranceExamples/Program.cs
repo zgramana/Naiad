@@ -114,8 +114,8 @@ namespace FaultToleranceExamples
 
     public class Program
     {
-        private string accountName = "";
-        private string accountKey = "";
+        private string accountName = null;
+        private string accountKey = null;
         private string containerName = "checkpoint";
 
         public interface IRecord
@@ -1001,8 +1001,9 @@ namespace FaultToleranceExamples
                     }
             }
 
-            public FastPipeline(int queryProc, int baseProc, int range)
+            public FastPipeline(int processId, int queryProc, int baseProc, int range)
             {
+                this.processId = processId;
                 this.queryProc = queryProc;
                 this.baseProc = baseProc;
                 this.range = range;
@@ -1669,6 +1670,12 @@ namespace FaultToleranceExamples
 
             if (args.Length > 0 && args[0].ToLower() == "-azure")
             {
+                if (accountName == null)
+                {
+                    var defaultAccount = Microsoft.Research.Naiad.Frameworks.Azure.Helpers.DefaultAccount(conf);
+                    accountName = defaultAccount.Credentials.AccountName;
+                    accountKey = defaultAccount.Credentials.ExportBase64EncodedKey();
+                }
                 conf.CheckpointingFactory = s => new AzureStreamSequence(accountName, accountKey, containerName, s);
             }
             else
@@ -1685,7 +1692,7 @@ namespace FaultToleranceExamples
                 this.slow = new SlowPipeline(slowBase, slowRange);
                 this.cc = new CCPipeline(ccBase, ccRange);
                 //this.buggy = new FastPipeline(slowBase, fbBase, fbRange);
-                this.perfect = new FastPipeline(fpBase, fpBase, fpRange);
+                this.perfect = new FastPipeline(this.processId, fpBase, fpBase, fpRange);
 
                 this.batchCoordinator = new BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, BatchIn<Epoch>>>>>();
                 using (var bTrigger = computation.WithPlacement(batchTriggerPlacement))
@@ -1734,7 +1741,7 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
-                        System.Threading.Thread.Sleep(Timeout.Infinite);
+                        //System.Threading.Thread.Sleep(Timeout.Infinite);
                         System.Threading.Thread.Sleep(15000);
                         if (conf.Processes > 2)
                         {

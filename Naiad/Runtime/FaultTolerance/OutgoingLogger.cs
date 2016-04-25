@@ -288,6 +288,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                     if (newLowest.Contains(this.collectedFrontier) && !newLowest.Equals(this.collectedFrontier))
                     {
                         this.logger.GarbageCollectForReceivers(newLowest);
+                        this.discardedTimes.ExceptAll(this.parent.stage.StageId, newLowest);
                         this.collectedFrontier = newLowest;
                     }
                 }

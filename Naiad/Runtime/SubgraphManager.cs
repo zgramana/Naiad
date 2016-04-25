@@ -959,7 +959,7 @@ namespace Microsoft.Research.Naiad
         }
 
         private void ShowTopology()
-        {
+        {   
             foreach (var stage in this.stages.Values.OrderBy(s => s.StageId))
             {
                 Console.WriteLine(stage.ToString());
@@ -976,6 +976,7 @@ namespace Microsoft.Research.Naiad
                 }
                 Console.WriteLine(outEdge);
             }
+            Console.WriteLine(this.stages.Count + " stages");
         }
 
         private IEnumerable<Pair<Pair<int,int>,Pair<int,int>>> EdgeTopology()

@@ -1,6 +1,6 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2013
-VisualStudioVersion = 12.0.30723.0
+VisualStudioVersion = 12.0.40629.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Naiad", "Naiad\Naiad.csproj", "{A6221415-1283-4C04-8D2C-E25A857E1FE9}"
 EndProject
@@ -26,6 +26,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AzureExamples", "AzureExamp
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{953D9EB4-5736-4CBD-BEBE-9552F6E677C5}"
 	ProjectSection(SolutionItems) = preProject
+		AzurePowershellFunctions.ps1 = AzurePowershellFunctions.ps1
 		RunOnAzure.ps1 = RunOnAzure.ps1
 		SharedAssemblyInfo.cs = SharedAssemblyInfo.cs
 		SolutionUtils\UpdateNuGetVersions.cs = SolutionUtils\UpdateNuGetVersions.cs
@@ -46,6 +47,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FaultToleranceManager", "FaultToleranceManager\FaultToleranceManager.csproj", "{543A8606-16B8-49EA-B8AC-11EB1824B51C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FaultToleranceExamples", "FaultToleranceExamples\FaultToleranceExamples.csproj", "{A8454E23-D558-4508-B407-164091C68B54}"
+EndProject
+Project("{151D2E53-A2C4-4D7D-83FE-D05416EBD58E}") = "AzureResourceGroup", "AzureResourceGroup\AzureResourceGroup.deployproj", "{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -572,6 +575,36 @@ Global
 		{A8454E23-D558-4508-B407-164091C68B54}.Tracing|x64.ActiveCfg = Release|x64
 		{A8454E23-D558-4508-B407-164091C68B54}.Tracing|x64.Build.0 = Release|x64
 		{A8454E23-D558-4508-B407-164091C68B54}.Tracing|x86.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Debug|Mixed Platforms.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Debug|Mixed Platforms.Build.0 = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoDebug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoDebug|Any CPU.Build.0 = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoDebug|Mixed Platforms.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoDebug|Mixed Platforms.Build.0 = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoDebug|x64.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoDebug|x86.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoRelease|Any CPU.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoRelease|Any CPU.Build.0 = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoRelease|Mixed Platforms.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoRelease|Mixed Platforms.Build.0 = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoRelease|x64.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.MonoRelease|x86.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Release|Mixed Platforms.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Release|Mixed Platforms.Build.0 = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Release|x64.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Release|x86.ActiveCfg = Release|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Tracing|Any CPU.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Tracing|Any CPU.Build.0 = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Tracing|Mixed Platforms.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Tracing|Mixed Platforms.Build.0 = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Tracing|x64.ActiveCfg = Debug|Any CPU
+		{1D5CC283-2ADD-40FA-9EA7-84F3FD1439A3}.Tracing|x86.ActiveCfg = Debug|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
