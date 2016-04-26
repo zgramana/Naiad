@@ -308,6 +308,8 @@ namespace Microsoft.Research.Naiad
         public NameValueCollection AdditionalSettings { get { return this.additionalSettings; } }
         private NameValueCollection additionalSettings = new NameValueCollection();
 
+        public Func<string, StreamWriter> LogStreamFactory { get; set; }
+
         /// <summary>
         /// Prints information about the standard Naiad command-line options, which are used to build
         /// a configuration in Configuration.FromArgs().

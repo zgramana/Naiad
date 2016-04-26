@@ -236,7 +236,7 @@ namespace FaultToleranceExamples
 
         public class FastPipeline
         {
-            private FileStream checkpointLogFile = null;
+            private Configuration config;
             private StreamWriter checkpointLog = null;
             internal StreamWriter CheckpointLog
             {
@@ -245,36 +245,18 @@ namespace FaultToleranceExamples
                     if (checkpointLog == null)
                     {
                         string fileName = String.Format("fastPipe.{0:D3}.log", processId);
-                        this.checkpointLogFile = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-                        this.checkpointLog = new StreamWriter(this.checkpointLogFile);
-                        var flush = new System.Threading.Thread(new System.Threading.ThreadStart(() => FlushThread()));
-                        flush.Start();
+                        checkpointLog = this.config.LogStreamFactory(fileName);
                     }
                     return checkpointLog;
                 }
             }
 
-            private void FlushThread()
-            {
-                while (true)
-                {
-                    Thread.Sleep(1000);
-                    lock (this)
-                    {
-                        if (this.checkpointLog != null)
-                        {
-                            this.checkpointLog.Flush();
-                            this.checkpointLogFile.Flush(true);
-                        }
-                    }
-                }
-            }
-
             public void WriteLog(string entry, params object[] args)
             {
-                lock (this)
+                var log = this.CheckpointLog;
+                lock (log)
                 {
-                    this.CheckpointLog.WriteLine(entry, args);
+                    log.WriteLine(entry, args);
                 }
             }
 
@@ -608,7 +590,6 @@ namespace FaultToleranceExamples
 
             public struct Record : IEquatable<Record>
             {
-                public int homeProcess;
                 public long startMs;
                 public Pair<long, long> slowWindow;
                 public Pair<long, long> ccWindow;
@@ -617,8 +598,7 @@ namespace FaultToleranceExamples
 
                 public bool Equals(Record other)
                 {
-                    return homeProcess == other.homeProcess &&
-                        startMs == other.startMs &&
+                    return startMs == other.startMs &&
                         slowWindow.Equals(other.slowWindow) &&
                         ccWindow.Equals(other.ccWindow) &&
                         slowJoinKey == other.slowJoinKey &&
@@ -759,7 +739,6 @@ namespace FaultToleranceExamples
                 {
                     yield return new Record
                     {
-                        homeProcess = this.processId,
                         startMs = ms,
                         slowWindow = (-1L).PairWith(-1L),
                         ccWindow = (-1L).PairWith(-1L),
@@ -772,7 +751,6 @@ namespace FaultToleranceExamples
                 {
                     yield return new Record
                     {
-                        homeProcess = this.processId,
                         startMs = ms,
                         slowWindow = (-1L).PairWith(-1L),
                         ccWindow = (-1L).PairWith(-1L),
@@ -1251,6 +1229,7 @@ namespace FaultToleranceExamples
         }
 
         private int processId;
+        private Configuration config;
         private FileStream checkpointLogFile = null;
         private StreamWriter checkpointLog = null;
         internal StreamWriter CheckpointLog
@@ -1260,36 +1239,18 @@ namespace FaultToleranceExamples
                 if (checkpointLog == null)
                 {
                     string fileName = String.Format("inputLatency.{0:D3}.log", this.processId);
-                    this.checkpointLogFile = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-                    this.checkpointLog = new StreamWriter(this.checkpointLogFile);
-                    var flush = new System.Threading.Thread(new System.Threading.ThreadStart(() => FlushThread()));
-                    flush.Start();
+                    checkpointLog = this.config.LogStreamFactory(fileName);
                 }
                 return checkpointLog;
             }
         }
 
-        private void FlushThread()
-        {
-            while (true)
-            {
-                Thread.Sleep(1000);
-                lock (this)
-                {
-                    if (this.checkpointLog != null)
-                    {
-                        this.checkpointLog.Flush();
-                        this.checkpointLogFile.Flush(true);
-                    }
-                }
-            }
-        }
-
         public void WriteLog(string entry)
         {
-            lock (this)
+            var log = this.CheckpointLog;
+            lock (log)
             {
-                this.CheckpointLog.WriteLine(entry);
+                log.WriteLine(entry);
             }
         }
 
@@ -1387,7 +1348,7 @@ namespace FaultToleranceExamples
 
         public void AcceptCCReduceStableTime(Pointstamp stamp)
         {
-            KeyValuePair<BatchIn<BatchIn<Epoch>>, long>[] earlier;
+            KeyValuePair<BatchIn<Epoch>, long>[] earlier;
             lock (this.ccBatchEntryTime)
             {
                 earlier = this.ccBatchEntryTime
@@ -1404,13 +1365,13 @@ namespace FaultToleranceExamples
             {
                 double latency = (double)(now - ccBatch.Value) / (double)TimeSpan.TicksPerMillisecond;
                 this.WriteLog("C" + ccBatch.Key + " " + latency);
-                //Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + latency);
+                Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + latency);
             }
         }
 
         public void AcceptSlowReduceStableTime(Pointstamp stamp)
         {
-            KeyValuePair<BatchIn<Epoch>, long>[] earlier;
+            KeyValuePair<Epoch, long>[] earlier;
             lock (this.slowBatchEntryTime)
             {
                 earlier = this.slowBatchEntryTime
@@ -1427,7 +1388,7 @@ namespace FaultToleranceExamples
             {
                 double latency = (double)(now - slowBatch.Value) / (double)TimeSpan.TicksPerMillisecond;
                 this.WriteLog("S" + slowBatch.Key + " " + latency);
-                //Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + latency);
+                Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + latency);
             }
         }
 
@@ -1448,12 +1409,20 @@ namespace FaultToleranceExamples
                 if (nowMs > nextSlowBatch)
                 {
                     sendingSlowBatch = new Epoch(sendingSlowBatch.epoch + 1);
+                    lock (this.slowBatchEntryTime)
+                    {
+                        this.slowBatchEntryTime.Add(sendingSlowBatch, now);
+                    }
                     nextSlowBatch += Program.slowBatchTime;
                 }
 
                 if (nowMs > nextCCBatch)
                 {
                     sendingCCBatch = new BatchIn<Epoch>(sendingCCBatch.outerTime, sendingCCBatch.batch + 1);
+                    lock (this.ccBatchEntryTime)
+                    {
+                        this.ccBatchEntryTime.Add(sendingCCBatch, now);
+                    }
                     nextCCBatch += Program.ccBatchTime;
                 }
 
@@ -1480,8 +1449,8 @@ namespace FaultToleranceExamples
         private Epoch currentSlowBatch = new Epoch(0);
         private BatchIn<Epoch> currentCCBatch = new BatchIn<Epoch>(new Epoch(0), 0);
 
-        private readonly Dictionary<BatchIn<Epoch>, long> slowBatchEntryTime = new Dictionary<BatchIn<Epoch>, long>();
-        private readonly Dictionary<BatchIn<BatchIn<Epoch>>, long> ccBatchEntryTime = new Dictionary<BatchIn<BatchIn<Epoch>>, long>();
+        private readonly Dictionary<Epoch, long> slowBatchEntryTime = new Dictionary<Epoch, long>();
+        private readonly Dictionary<BatchIn<Epoch>, long> ccBatchEntryTime = new Dictionary<BatchIn<Epoch>, long>();
 
         void SendBatch(long entryTicks, Epoch slowBatch, BatchIn<Epoch> ccBatch)
         {
@@ -1492,14 +1461,6 @@ namespace FaultToleranceExamples
             {
                 this.slow.source.CompleteOuterBatch(new Epoch(slowBatch.epoch - 1));
                 this.currentSlowBatch = slowBatch;
-            }
-
-            if (this.processId == Program.slowBase)
-            {
-                lock (this.slowBatchEntryTime)
-                {
-                    this.slowBatchEntryTime.Add(this.slow.source.NextTime(), entryTicks);
-                }
             }
 
             this.slow.source.OnNext(batch.First);
@@ -1516,14 +1477,6 @@ namespace FaultToleranceExamples
                     this.cc.source.CompleteOuterBatch(new BatchIn<Epoch>(ccBatch.outerTime, ccBatch.batch - 1));
                 }
                 this.currentCCBatch = ccBatch;
-            }
-
-            if (this.processId == Program.slowBase)
-            {
-                lock (this.ccBatchEntryTime)
-                {
-                    this.ccBatchEntryTime.Add(this.cc.source.NextTime(), entryTicks);
-                }
             }
 
             this.cc.source.OnNext(batch.First.Concat(batch.Second));
@@ -1648,12 +1601,36 @@ namespace FaultToleranceExamples
         private FastPipeline perfect;
         private BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, BatchIn<Epoch>>>>> batchCoordinator;
 
+        private static StreamWriter MakeFileLogStream(string fileName, string prefix)
+        {
+            var checkpointLogFile = new FileStream(Path.Combine(prefix, fileName), FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+            var checkpointLog = new StreamWriter(checkpointLogFile);
+            var flush = new System.Threading.Thread(
+                new System.Threading.ThreadStart(() => FlushFileThread(checkpointLog, checkpointLogFile)));
+            flush.Start();
+            return checkpointLog;
+        }
+
+        private static void FlushFileThread(StreamWriter log, FileStream logFile)
+        {
+            while (true)
+            {
+                Thread.Sleep(1000);
+                lock (log)
+                {
+                    log.Flush();
+                    logFile.Flush(true);
+                }
+            }
+        }
+
         public void Execute(string[] args)
         {
             FTManager manager = new FTManager();
 
             Configuration conf = Configuration.FromArgs(ref args);
             conf.MaxLatticeInternStaleTimes = 10;
+            this.config = conf;
             this.processId = conf.ProcessID;
             this.processes = conf.Processes;
             Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
@@ -1668,7 +1645,39 @@ namespace FaultToleranceExamples
                 this.batchMaker = null;
             }
 
-            if (args.Length > 0 && args[0].ToLower() == "-azure")
+            bool useAzure = false;
+            string logPrefix = "";
+            int i = 0;
+            while (i < args.Length)
+            {
+                switch (args[i].ToLower())
+                {
+                    case "-azure":
+                        useAzure = true;
+                        ++i;
+                        break;
+
+                    case "-sizes":
+                        slowBase = 0;
+                        slowRange = Int32.Parse(args[i + 1]);
+                        ccBase = slowBase + slowRange;
+                        ccRange = Int32.Parse(args[i + 2]);
+                        fpBase = ccBase + ccRange;
+                        fpRange = Int32.Parse(args[i + 3]);
+                        i += 4;
+                        break;
+
+                    case "-log":
+                        logPrefix = args[i + 1];
+                        i += 2;
+                        break;
+                }
+            }
+
+            System.IO.Directory.CreateDirectory(logPrefix);
+            this.config.LogStreamFactory = (s => MakeFileLogStream(s, logPrefix));
+
+            if (useAzure)
             {
                 if (accountName == null)
                 {

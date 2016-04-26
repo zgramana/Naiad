@@ -358,7 +358,6 @@ namespace Microsoft.Research.Naiad
         private volatile bool aborted = false;
         private Thread restoreThread;
 
-        private FileStream checkpointLogFile = null;
         private StreamWriter checkpointLog = null;
         internal StreamWriter CheckpointLog
         {
@@ -368,36 +367,18 @@ namespace Microsoft.Research.Naiad
                 {
                     string fileName = String.Format("controller.{0:D3}.log",
                         this.Configuration.ProcessID);
-                    this.checkpointLogFile = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-                    this.checkpointLog = new StreamWriter(this.checkpointLogFile);
-                    var flush = new System.Threading.Thread(new System.Threading.ThreadStart(() => FlushThread()));
-                    flush.Start();
+                    checkpointLog = this.Configuration.LogStreamFactory(fileName);
                 }
                 return checkpointLog;
             }
         }
 
-        private void FlushThread()
-        {
-            while (true)
-            {
-                Thread.Sleep(1000);
-                lock (this)
-                {
-                    if (this.checkpointLog != null)
-                    {
-                        this.checkpointLog.Flush();
-                        this.checkpointLogFile.Flush(true);
-                    }
-                }
-            }
-        }
-
         public void WriteLog(string entry)
         {
-            lock (this)
+            var log = this.CheckpointLog;
+            lock (log)
             {
-                this.CheckpointLog.WriteLine(entry);
+                log.WriteLine(entry);
             }
         }
 
