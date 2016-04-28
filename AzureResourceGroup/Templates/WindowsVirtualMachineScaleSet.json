@@ -193,6 +193,18 @@
                             "backendPort": 5986
                         }
                     },
+                    {
+                        "name": "[variables('natPoolName')]",
+                        "properties": {
+                            "frontendIPConfiguration": {
+                                "id": "[variables('frontEndIPConfigID')]"
+                            },
+                            "protocol": "tcp",
+                            "frontendPortRangeStart": 50000,
+                            "frontendPortRangeEnd": 50099,
+                            "backendPort": 3389
+                        }
+                    }
                 ]
             }
         },
@@ -284,6 +296,9 @@
                                                     }
                                                 ],
                                                 "loadBalancerInboundNatPools": [
+                                                    {
+                                                        "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('loadBalancerName'), '/inboundNatPools/', variables('natPoolName'))]"
+                                                    },
                                                     {
                                                         "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Network/loadBalancers/', variables('loadBalancerName'), '/inboundNatPools/', variables('rmsPoolName'))]"
                                                     }

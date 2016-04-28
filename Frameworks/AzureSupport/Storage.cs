@@ -48,12 +48,20 @@ namespace Microsoft.Research.Naiad.Frameworks.Azure
     class NamespaceDoc
     { }
 
+    /// <summary>
+    /// Helper methods for Azure accounts
+    /// </summary>
     public static class Helpers
     {
         #region Default connection string.
 
         private const string DefaultConnectionString = "Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString";
 
+        /// <summary>
+        /// A configuration's default Azure storage account if set
+        /// </summary>
+        /// <param name="configuration">Configuration to retrieve the storage account from</param>
+        /// <returns>The default storage account</returns>
         public static CloudStorageAccount DefaultAccount(Configuration configuration)
         {
             string[] connectionStrings = configuration.AdditionalSettings.GetValues(DefaultConnectionString);

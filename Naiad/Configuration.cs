@@ -308,6 +308,9 @@ namespace Microsoft.Research.Naiad
         public NameValueCollection AdditionalSettings { get { return this.additionalSettings; } }
         private NameValueCollection additionalSettings = new NameValueCollection();
 
+        /// <summary>
+        /// Factory to create a stream for logging given a leaf filename.
+        /// </summary>
         public Func<string, StreamWriter> LogStreamFactory { get; set; }
 
         /// <summary>

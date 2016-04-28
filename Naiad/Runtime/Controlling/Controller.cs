@@ -123,6 +123,11 @@ namespace Microsoft.Research.Naiad
         Placement DefaultPlacement { get; }
 
         /// <summary>
+        /// A stopwatch that is started when the computation starts
+        /// </summary>
+        Stopwatch Stopwatch { get; }
+
+        /// <summary>
         /// Blocks the caller until all computation in this controller has terminated.
         /// </summary>
         /// <remarks>

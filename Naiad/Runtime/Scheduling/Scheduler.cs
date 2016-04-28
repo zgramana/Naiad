@@ -387,7 +387,6 @@ namespace Microsoft.Research.Naiad.Scheduling
             this.isRestoring = false;
         }
 
-        private FileStream checkpointLogFile = null;
         private StreamWriter checkpointLog = null;
         private StreamWriter CheckpointLog
         {
@@ -397,8 +396,7 @@ namespace Microsoft.Research.Naiad.Scheduling
                 {
                     string fileName = String.Format("checkpoint.{0:D3}.{1:D3}.log",
                         this.Controller.Configuration.ProcessID, this.Index);
-                    this.checkpointLogFile = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-                    this.checkpointLog = new StreamWriter(this.checkpointLogFile);
+                    this.checkpointLog = this.Controller.Configuration.LogStreamFactory(fileName);
                 }
                 return checkpointLog;
             }
@@ -409,17 +407,6 @@ namespace Microsoft.Research.Naiad.Scheduling
             lock (this)
             {
                 this.CheckpointLog.WriteLine(format, args);
-            }
-        }
-
-        private long logFlushTime = 0;
-        private void ConsiderFlushingLogs()
-        {
-            if (this.checkpointLog != null && this.Controller.Stopwatch.ElapsedMilliseconds - this.logFlushTime > 1000)
-            {
-                this.checkpointLog.Flush();
-                this.checkpointLogFile.Flush(true);
-                this.logFlushTime = this.Controller.Stopwatch.ElapsedMilliseconds;
             }
         }
 
@@ -439,8 +426,6 @@ namespace Microsoft.Research.Naiad.Scheduling
             {
                 // set to true if messages or or notifications delivered.
                 var didAnything = false;
-
-                this.ConsiderFlushingLogs();
 
                 // test pause event.
                 this.ConsiderPausing();

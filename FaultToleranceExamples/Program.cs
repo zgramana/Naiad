@@ -244,7 +244,7 @@ namespace FaultToleranceExamples
                 {
                     if (checkpointLog == null)
                     {
-                        string fileName = String.Format("fastPipe.{0:D3}.log", processId);
+                        string fileName = String.Format("fastPipe.{0:D3}.log", this.config.ProcessID);
                         checkpointLog = this.config.LogStreamFactory(fileName);
                     }
                     return checkpointLog;
@@ -260,7 +260,6 @@ namespace FaultToleranceExamples
                 }
             }
 
-            public int processId;
             public int queryProc;
             public int baseProc;
             public int range;
@@ -840,11 +839,14 @@ namespace FaultToleranceExamples
                     }
                 }
 
+                var totalTicks = this.computation.Controller.Stopwatch.ElapsedTicks;
+                var totalMicroSeconds = (totalTicks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
+
                 foreach (var record in released.Take(1))
                 {
                     if (record.Second.startMs == -1)
                     {
-                        this.WriteLog("-1 -1 -1");
+                        this.WriteLog("-1 -1 -1 {0:D11}", totalMicroSeconds);
                         Console.WriteLine("-1");
                     }
                     else
@@ -863,12 +865,13 @@ namespace FaultToleranceExamples
                         long latency = doneMs - record.Second.startMs;
                         long slowStaleness = (slowBatchMs < 0) ? -2 : doneMs - slowBatchMs;
                         long ccStaleness = (ccBatchMs < 0) ? -2 : doneMs - ccBatchMs;
-                        this.WriteLog("{0:D11} {1:D11} {2:D11}", latency, slowStaleness, ccStaleness);
+                        this.WriteLog("{0:D11} {1:D11} {2:D11} {3:D11}", latency, slowStaleness, ccStaleness, totalMicroSeconds);
                         Console.WriteLine("{0:D11} {1:D11} {2:D11}", latency, slowStaleness, ccStaleness);
                     }
                 }
             }
 
+            private Computation computation;
             private SubBatchDataSource<Record, BatchIn<Epoch>> dataSource;
             public int slowStage;
             public int ccStage;
@@ -887,6 +890,8 @@ namespace FaultToleranceExamples
                 Stream<Pair<long, long>, BatchIn<Epoch>> ccTimeWindow,
                 Placement ccPlacement)
             {
+                this.computation = computation;
+
                 this.dataSource = new SubBatchDataSource<Record, BatchIn<Epoch>>();
 
                 Placement fastPlacement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range), Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
@@ -979,9 +984,9 @@ namespace FaultToleranceExamples
                     }
             }
 
-            public FastPipeline(int processId, int queryProc, int baseProc, int range)
+            public FastPipeline(Configuration config, int queryProc, int baseProc, int range)
             {
-                this.processId = processId;
+                this.config = config;
                 this.queryProc = queryProc;
                 this.baseProc = baseProc;
                 this.range = range;
@@ -1228,9 +1233,7 @@ namespace FaultToleranceExamples
             }
         }
 
-        private int processId;
         private Configuration config;
-        private FileStream checkpointLogFile = null;
         private StreamWriter checkpointLog = null;
         internal StreamWriter CheckpointLog
         {
@@ -1238,7 +1241,7 @@ namespace FaultToleranceExamples
             {
                 if (checkpointLog == null)
                 {
-                    string fileName = String.Format("inputLatency.{0:D3}.log", this.processId);
+                    string fileName = String.Format("inputLatency.{0:D3}.log", this.config.ProcessID);
                     checkpointLog = this.config.LogStreamFactory(fileName);
                 }
                 return checkpointLog;
@@ -1348,7 +1351,7 @@ namespace FaultToleranceExamples
 
         public void AcceptCCReduceStableTime(Pointstamp stamp)
         {
-            KeyValuePair<BatchIn<Epoch>, long>[] earlier;
+            KeyValuePair<BatchIn<BatchIn<Epoch>>, long>[] earlier;
             lock (this.ccBatchEntryTime)
             {
                 earlier = this.ccBatchEntryTime
@@ -1371,7 +1374,7 @@ namespace FaultToleranceExamples
 
         public void AcceptSlowReduceStableTime(Pointstamp stamp)
         {
-            KeyValuePair<Epoch, long>[] earlier;
+            KeyValuePair<BatchIn<Epoch>, long>[] earlier;
             lock (this.slowBatchEntryTime)
             {
                 earlier = this.slowBatchEntryTime
@@ -1399,7 +1402,9 @@ namespace FaultToleranceExamples
             long nextCCBatch = nowMs + Program.ccBatchTime;
 
             Epoch sendingSlowBatch = new Epoch(0);
+            int slowSubBatch = 0;
             BatchIn<Epoch> sendingCCBatch = new BatchIn<Epoch>(new Epoch(0), 0);
+            int CCSubBatch = 0;
 
             while (true)
             {
@@ -1409,20 +1414,14 @@ namespace FaultToleranceExamples
                 if (nowMs > nextSlowBatch)
                 {
                     sendingSlowBatch = new Epoch(sendingSlowBatch.epoch + 1);
-                    lock (this.slowBatchEntryTime)
-                    {
-                        this.slowBatchEntryTime.Add(sendingSlowBatch, now);
-                    }
+                    slowSubBatch = 0;
                     nextSlowBatch += Program.slowBatchTime;
                 }
 
                 if (nowMs > nextCCBatch)
                 {
                     sendingCCBatch = new BatchIn<Epoch>(sendingCCBatch.outerTime, sendingCCBatch.batch + 1);
-                    lock (this.ccBatchEntryTime)
-                    {
-                        this.ccBatchEntryTime.Add(sendingCCBatch, now);
-                    }
+                    CCSubBatch = 0;
                     nextCCBatch += Program.ccBatchTime;
                 }
 
@@ -1434,12 +1433,31 @@ namespace FaultToleranceExamples
                     }
                 }
 
+                lock (this.slowBatchEntryTime)
+                {
+                    BatchIn<Epoch> slowBatch;
+                    slowBatch.outerTime = sendingSlowBatch;
+                    slowBatch.batch = slowSubBatch;
+                    this.slowBatchEntryTime.Add(slowBatch, now);
+                }
+
+                lock (this.ccBatchEntryTime)
+                {
+                    BatchIn<BatchIn<Epoch>> ccBatch;
+                    ccBatch.outerTime = sendingCCBatch;
+                    ccBatch.batch = CCSubBatch;
+                    this.ccBatchEntryTime.Add(ccBatch, now);
+                }
+
                 Console.WriteLine("Sending slow " + sendingSlowBatch + " cc " + sendingCCBatch);
 
                 // tell each input worker to start the next batch
                 this.batchCoordinator.OnNext(Enumerable
                     .Range(0, Program.slowRange)
                     .Select(i => i.PairWith(now.PairWith(sendingSlowBatch.PairWith(sendingCCBatch)))));
+
+                ++slowSubBatch;
+                ++CCSubBatch;
 
                 Thread.Sleep(Program.htSleepTime);
             }
@@ -1449,8 +1467,8 @@ namespace FaultToleranceExamples
         private Epoch currentSlowBatch = new Epoch(0);
         private BatchIn<Epoch> currentCCBatch = new BatchIn<Epoch>(new Epoch(0), 0);
 
-        private readonly Dictionary<Epoch, long> slowBatchEntryTime = new Dictionary<Epoch, long>();
-        private readonly Dictionary<BatchIn<Epoch>, long> ccBatchEntryTime = new Dictionary<BatchIn<Epoch>, long>();
+        private readonly Dictionary<BatchIn<Epoch>, long> slowBatchEntryTime = new Dictionary<BatchIn<Epoch>, long>();
+        private readonly Dictionary<BatchIn<BatchIn<Epoch>>, long> ccBatchEntryTime = new Dictionary<BatchIn<BatchIn<Epoch>>, long>();
 
         void SendBatch(long entryTicks, Epoch slowBatch, BatchIn<Epoch> ccBatch)
         {
@@ -1594,7 +1612,6 @@ namespace FaultToleranceExamples
 #endif
 
         static private Program program;
-        private int processes;
         private Computation computation;
         private SlowPipeline slow;
         private CCPipeline cc;
@@ -1628,17 +1645,14 @@ namespace FaultToleranceExamples
         {
             FTManager manager = new FTManager();
 
-            Configuration conf = Configuration.FromArgs(ref args);
-            conf.MaxLatticeInternStaleTimes = 10;
-            this.config = conf;
-            this.processId = conf.ProcessID;
-            this.processes = conf.Processes;
+            this.config = Configuration.FromArgs(ref args);
+            this.config.MaxLatticeInternStaleTimes = 10;
             Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
             Placement batchTriggerPlacement = new Placement.ProcessRange(Enumerable.Range(fpBase, 1), Enumerable.Range(0, 1));
 
-            if (inputPlacement.Select(x => x.ProcessId).Contains(this.processId))
+            if (inputPlacement.Select(x => x.ProcessId).Contains(this.config.ProcessID))
             {
-                this.batchMaker = new BatchMaker(slowRange, this.processId-slowBase);
+                this.batchMaker = new BatchMaker(slowRange, this.config.ProcessID-slowBase);
             }
             else
             {
@@ -1681,27 +1695,27 @@ namespace FaultToleranceExamples
             {
                 if (accountName == null)
                 {
-                    var defaultAccount = Microsoft.Research.Naiad.Frameworks.Azure.Helpers.DefaultAccount(conf);
+                    var defaultAccount = Microsoft.Research.Naiad.Frameworks.Azure.Helpers.DefaultAccount(this.config);
                     accountName = defaultAccount.Credentials.AccountName;
                     accountKey = defaultAccount.Credentials.ExportBase64EncodedKey();
                 }
-                conf.CheckpointingFactory = s => new AzureStreamSequence(accountName, accountKey, containerName, s);
+                this.config.CheckpointingFactory = s => new AzureStreamSequence(accountName, accountKey, containerName, s);
             }
             else
             {
                 System.IO.Directory.CreateDirectory("checkpoint");
-                conf.CheckpointingFactory = s => new FileStreamSequence("checkpoint", s);
+                this.config.CheckpointingFactory = s => new FileStreamSequence("checkpoint", s);
             }
 
-            conf.DefaultCheckpointInterval = 1000;
+            this.config.DefaultCheckpointInterval = 1000;
 
-            using (var computation = NewComputation.FromConfig(conf))
+            using (var computation = NewComputation.FromConfig(this.config))
             {
                 this.computation = computation;
                 this.slow = new SlowPipeline(slowBase, slowRange);
                 this.cc = new CCPipeline(ccBase, ccRange);
                 //this.buggy = new FastPipeline(slowBase, fbBase, fbRange);
-                this.perfect = new FastPipeline(this.processId, fpBase, fpBase, fpRange);
+                this.perfect = new FastPipeline(this.config, fpBase, fpBase, fpRange);
 
                 this.batchCoordinator = new BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, BatchIn<Epoch>>>>>();
                 using (var bTrigger = computation.WithPlacement(batchTriggerPlacement))
@@ -1716,19 +1730,19 @@ namespace FaultToleranceExamples
                 }
                 this.cc.Make(computation, this.slow, this.perfect);
 
-                if (conf.ProcessID == 0)
+                if (this.config.ProcessID == 0)
                 {
                     manager.Initialize(computation, this.slow.ToMonitor.Concat(this.cc.ToMonitor.Concat(this.perfect.ToMonitor)).Distinct());
                 }
 
-                //computation.OnStageStable += (x, y) => { Console.WriteLine(y.stageId + " " + y.frontier[0]); };
+                computation.OnStageStable += (x, y) => { Console.WriteLine(y.stageId + " " + y.frontier[0]); };
 
                 computation.Activate();
 
                 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
                 //computation.OnFrontierChange += (x, y) => { Console.WriteLine(stopwatch.Elapsed + "\t" + string.Join(", ", y.NewFrontier)); Console.Out.Flush(); };
 
-                if (conf.ProcessID == fpBase)
+                if (this.config.ProcessID == fpBase)
                 {
                     computation.OnStageStable += this.ReactToStable;
                     this.StartBatches();
@@ -1738,7 +1752,7 @@ namespace FaultToleranceExamples
                     this.batchCoordinator.OnCompleted();
                 }
 
-                if (conf.ProcessID == 0)
+                if (this.config.ProcessID == 0)
                 {
                     IEnumerable<int> failSlow = Enumerable.Range(slowBase, slowRange);
                     IEnumerable<int> failMedium =
@@ -1752,7 +1766,7 @@ namespace FaultToleranceExamples
                     {
                         //System.Threading.Thread.Sleep(Timeout.Infinite);
                         System.Threading.Thread.Sleep(15000);
-                        if (conf.Processes > 2)
+                        if (this.config.Processes > 2)
                         {
                             manager.FailProcess(1);
                         }
