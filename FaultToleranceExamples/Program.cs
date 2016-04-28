@@ -1735,7 +1735,7 @@ namespace FaultToleranceExamples
                     manager.Initialize(computation, this.slow.ToMonitor.Concat(this.cc.ToMonitor.Concat(this.perfect.ToMonitor)).Distinct());
                 }
 
-                computation.OnStageStable += (x, y) => { Console.WriteLine(y.stageId + " " + y.frontier[0]); };
+                //computation.OnStageStable += (x, y) => { Console.WriteLine(y.stageId + " " + y.frontier[0]); };
 
                 computation.Activate();
 
