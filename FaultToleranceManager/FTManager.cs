@@ -74,6 +74,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
     /// </summary>
     public class FTManager
     {
+        public FTManager(Func<string, LogStream> logStreamFactory)
+        {
+            this.logStreamFactory = logStreamFactory;
+        }
+
         private Stage[] stages;
         internal Stage[] Stages { get { return this.stages; } }
 
@@ -122,44 +127,19 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             return this.stageFrontiers[stageId].First().Key;
         }
 
-        private System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
-        private FileStream checkpointLogFile = null;
-        private StreamWriter checkpointLog = null;
-        internal StreamWriter CheckpointLog
+        private Func<string, LogStream> logStreamFactory;
+        private System.Diagnostics.Stopwatch stopwatch;
+        private LogStream checkpointLog = null;
+        internal LogStream CheckpointLog
         {
             get
             {
                 if (checkpointLog == null)
                 {
-                    string fileName = String.Format("ftmanager.log");
-                    this.checkpointLogFile = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-                    this.checkpointLog = new StreamWriter(this.checkpointLogFile);
-                    var flush = new System.Threading.Thread(new System.Threading.ThreadStart(() => FlushThread()));
-                    flush.Start();
+                    this.checkpointLog = logStreamFactory("ftmanager.log");
                     stopwatch.Start();
                 }
                 return checkpointLog;
-            }
-        }
-
-        private void FlushThread()
-        {
-            while (true)
-            {
-                Thread.Sleep(1000);
-                this.FlushLog();
-            }
-        }
-
-        public void FlushLog()
-        {
-            lock (this)
-            {
-                if (this.checkpointLog != null)
-                {
-                    this.checkpointLog.Flush();
-                    this.checkpointLogFile.Flush(true);
-                }
             }
         }
 
@@ -170,7 +150,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             lock (this)
             {
                 long microseconds = this.stopwatch.ElapsedTicks * 1000000L / System.Diagnostics.Stopwatch.Frequency;
-                this.CheckpointLog.WriteLine(String.Format("{0:D11}: {1}", microseconds, entry));
+                this.CheckpointLog.Log.WriteLine(String.Format("{0:D11}: {1}", microseconds, entry));
             }
         }
 
@@ -749,7 +729,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         {
                             Console.WriteLine(update.weight + ": " + update.record.node.StageId + "." + update.record.node.VertexId + " " + update.record.frontier);
                         }
-                        this.FlushLog();
+                        this.CheckpointLog.Flush();
                         throw new ApplicationException("Bad incremental logic");
                     }
                     if (this.debugLog)
@@ -1244,6 +1224,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             Configuration config = new Configuration();
             config.MaxLatticeInternStaleTimes = 10;
+            config.WorkerCount = 8;
 
             using (Computation reconciliation = NewComputation.FromConfig(config))
             {
@@ -1500,6 +1481,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public void Initialize(Computation computation, IEnumerable<int> stagesToMonitor)
         {
             this.computation = computation;
+            this.stopwatch = computation.Controller.Stopwatch;
 
             foreach (int stage in stagesToMonitor)
             {

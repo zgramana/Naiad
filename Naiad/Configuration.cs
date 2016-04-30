@@ -59,6 +59,21 @@ namespace Microsoft.Research.Naiad
     }
 
     /// <summary>
+    /// Stream used for logging
+    /// </summary>
+    public interface LogStream
+    {
+        /// <summary>
+        /// The stream to emit log entries on. It is flushed periodically in the background.
+        /// </summary>
+        StreamWriter Log { get; }
+        /// <summary>
+        /// Eagerly flush the log stream.
+        /// </summary>
+        void Flush();
+    }
+
+    /// <summary>
     /// Configuration information
     /// </summary>
     public class Configuration
@@ -311,7 +326,7 @@ namespace Microsoft.Research.Naiad
         /// <summary>
         /// Factory to create a stream for logging given a leaf filename.
         /// </summary>
-        public Func<string, StreamWriter> LogStreamFactory { get; set; }
+        public Func<string, LogStream> LogStreamFactory { get; set; }
 
         /// <summary>
         /// Prints information about the standard Naiad command-line options, which are used to build

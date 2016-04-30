@@ -4,7 +4,7 @@
     "parameters": {
         "vmSize": {
             "type": "string",
-            "defaultValue": "Standard_A1",
+            "defaultValue": "Standard_A4",
             "minLength": 1
         },
         "windowsOSVersion": {
@@ -335,29 +335,5 @@
                 }
             }
         },
-        {
-            "type": "Microsoft.Insights/autoscaleSettings",
-            "apiVersion": "2015-04-01",
-            "name": "autoscalewad",
-            "location": "[resourceGroup().location]",
-            "dependsOn": [
-                "[concat('Microsoft.Compute/virtualMachineScaleSets/', variables('namingInfix'))]"
-            ],
-            "properties": {
-                "name": "autoscalewad",
-                "targetResourceUri": "[concat('/subscriptions/',subscription().subscriptionId, '/resourceGroups/',  resourceGroup().name, '/providers/Microsoft.Compute/virtualMachineScaleSets/', variables('namingInfix'))]",
-                "enabled": true,
-                "profiles": [
-                    {
-                        "name": "Profile1",
-                        "capacity": {
-                            "minimum": "[parameters('instanceCount')]",
-                            "maximum": "[parameters('instanceCount')]",
-                            "default": "[parameters('instanceCount')]"
-                        },
-                    }
-                ]
-            }
-        }
     ]
 }

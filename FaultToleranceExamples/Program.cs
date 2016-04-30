@@ -245,7 +245,7 @@ namespace FaultToleranceExamples
                     if (checkpointLog == null)
                     {
                         string fileName = String.Format("fastPipe.{0:D3}.log", this.config.ProcessID);
-                        checkpointLog = this.config.LogStreamFactory(fileName);
+                        checkpointLog = this.config.LogStreamFactory(fileName).Log;
                     }
                     return checkpointLog;
                 }
@@ -1242,7 +1242,7 @@ namespace FaultToleranceExamples
                 if (checkpointLog == null)
                 {
                     string fileName = String.Format("inputLatency.{0:D3}.log", this.config.ProcessID);
-                    checkpointLog = this.config.LogStreamFactory(fileName);
+                    checkpointLog = this.config.LogStreamFactory(fileName).Log;
                 }
                 return checkpointLog;
             }
@@ -1583,6 +1583,16 @@ namespace FaultToleranceExamples
         //static private int fbRange = 1;
         static private int fpBase = 3;
         static private int fpRange = 1;
+#if false
+        static private int numberOfKeys = 10000;
+        static private int fastBatchSize = 10;
+        static private int fastSleepTime = 1000;
+        static private int ccBatchTime = 5000;
+        static private int slowBatchTime = 60000;
+        static private int htBatchSize = 10;
+        static private int htInitialBatches = 100;
+        static private int htSleepTime = 1000;
+#else
         static private int numberOfKeys = 100;
         static private int fastBatchSize = 1;
         static private int fastSleepTime = 1000;
@@ -1591,6 +1601,7 @@ namespace FaultToleranceExamples
         static private int htBatchSize = 10;
         static private int htSleepTime = 1000;
         static private int htInitialBatches = 10;
+#endif
 #else
         static private int slowBase = 0;
         static private int slowRange = 1;
@@ -1618,46 +1629,47 @@ namespace FaultToleranceExamples
         private FastPipeline perfect;
         private BatchedDataSource<Pair<int, Pair<long, Pair<Epoch, BatchIn<Epoch>>>>> batchCoordinator;
 
-        private static StreamWriter MakeFileLogStream(string fileName, string prefix)
+        private class FileLogStream : LogStream
         {
-            var checkpointLogFile = new FileStream(Path.Combine(prefix, fileName), FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-            var checkpointLog = new StreamWriter(checkpointLogFile);
-            var flush = new System.Threading.Thread(
-                new System.Threading.ThreadStart(() => FlushFileThread(checkpointLog, checkpointLogFile)));
-            flush.Start();
-            return checkpointLog;
-        }
-
-        private static void FlushFileThread(StreamWriter log, FileStream logFile)
-        {
-            while (true)
+            private StreamWriter log;
+            private FileStream logFile;
+            public StreamWriter Log
             {
-                Thread.Sleep(1000);
+                get { return log; }
+            }
+
+            public void Flush()
+            {
                 lock (log)
                 {
                     log.Flush();
                     logFile.Flush(true);
                 }
             }
+
+            private void FlushFileThread()
+            {
+                while (true)
+                {
+                    Thread.Sleep(1000);
+                    this.Flush();
+                }
+            }
+
+            public FileLogStream(string prefix, string fileName)
+            {
+                this.logFile = new FileStream(Path.Combine(prefix, fileName), FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+                this.log = new StreamWriter(this.logFile);
+                var flush = new System.Threading.Thread(
+                    new System.Threading.ThreadStart(() => this.FlushFileThread()));
+                flush.Start();
+            }
         }
 
         public void Execute(string[] args)
         {
-            FTManager manager = new FTManager();
-
             this.config = Configuration.FromArgs(ref args);
             this.config.MaxLatticeInternStaleTimes = 10;
-            Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
-            Placement batchTriggerPlacement = new Placement.ProcessRange(Enumerable.Range(fpBase, 1), Enumerable.Range(0, 1));
-
-            if (inputPlacement.Select(x => x.ProcessId).Contains(this.config.ProcessID))
-            {
-                this.batchMaker = new BatchMaker(slowRange, this.config.ProcessID-slowBase);
-            }
-            else
-            {
-                this.batchMaker = null;
-            }
 
             bool useAzure = false;
             string logPrefix = "";
@@ -1672,7 +1684,7 @@ namespace FaultToleranceExamples
                         break;
 
                     case "-sizes":
-                        slowBase = 0;
+                        slowBase = 1;
                         slowRange = Int32.Parse(args[i + 1]);
                         ccBase = slowBase + slowRange;
                         ccRange = Int32.Parse(args[i + 2]);
@@ -1689,7 +1701,9 @@ namespace FaultToleranceExamples
             }
 
             System.IO.Directory.CreateDirectory(logPrefix);
-            this.config.LogStreamFactory = (s => MakeFileLogStream(s, logPrefix));
+            this.config.LogStreamFactory = (s => new FileLogStream(logPrefix, s));
+
+            FTManager manager = new FTManager(this.config.LogStreamFactory);
 
             if (useAzure)
             {
@@ -1711,6 +1725,18 @@ namespace FaultToleranceExamples
 
             using (var computation = NewComputation.FromConfig(this.config))
             {
+                Placement inputPlacement = new Placement.ProcessRange(Enumerable.Range(slowBase, slowRange), Enumerable.Range(0, 1));
+                Placement batchTriggerPlacement = new Placement.ProcessRange(Enumerable.Range(fpBase, 1), Enumerable.Range(0, 1));
+
+                if (inputPlacement.Select(x => x.ProcessId).Contains(this.config.ProcessID))
+                {
+                    this.batchMaker = new BatchMaker(slowRange, this.config.ProcessID - slowBase);
+                }
+                else
+                {
+                    this.batchMaker = null;
+                }
+
                 this.computation = computation;
                 this.slow = new SlowPipeline(slowBase, slowRange);
                 this.cc = new CCPipeline(ccBase, ccRange);
@@ -1739,11 +1765,22 @@ namespace FaultToleranceExamples
 
                 computation.Activate();
 
-                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-                //computation.OnFrontierChange += (x, y) => { Console.WriteLine(stopwatch.Elapsed + "\t" + string.Join(", ", y.NewFrontier)); Console.Out.Flush(); };
-
                 if (this.config.ProcessID == fpBase)
                 {
+                    var stopwatch = computation.Controller.Stopwatch;
+                    HashSet<Pointstamp> previousFrontier = new HashSet<Pointstamp>();
+                    computation.OnFrontierChange += (x, y) =>
+                    {
+                        long ticks = stopwatch.ElapsedTicks;
+                        long microSeconds = (ticks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
+                        HashSet<Pointstamp> newSet = new HashSet<Pointstamp>();
+                        foreach (var f in y.NewFrontier) { newSet.Add(f); }
+                        var added = newSet.Where(f => !previousFrontier.Contains(f));
+                        var removed = previousFrontier.Where(f => !newSet.Contains(f));
+                        Console.WriteLine(String.Format("{0:D11}\t", microSeconds) + " +" + string.Join(", ", added) + " -" + string.Join(", ", removed));
+                        Console.Out.Flush();
+                        previousFrontier = newSet;
+                    };
                     computation.OnStageStable += this.ReactToStable;
                     this.StartBatches();
                 }
@@ -1764,7 +1801,7 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
-                        //System.Threading.Thread.Sleep(Timeout.Infinite);
+                        System.Threading.Thread.Sleep(Timeout.Infinite);
                         System.Threading.Thread.Sleep(15000);
                         if (this.config.Processes > 2)
                         {

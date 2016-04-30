@@ -396,7 +396,7 @@ namespace Microsoft.Research.Naiad.Scheduling
                 {
                     string fileName = String.Format("checkpoint.{0:D3}.{1:D3}.log",
                         this.Controller.Configuration.ProcessID, this.Index);
-                    this.checkpointLog = this.Controller.Configuration.LogStreamFactory(fileName);
+                    this.checkpointLog = this.Controller.Configuration.LogStreamFactory(fileName).Log;
                 }
                 return checkpointLog;
             }

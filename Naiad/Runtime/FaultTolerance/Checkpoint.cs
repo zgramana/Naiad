@@ -842,12 +842,12 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                     long endTicks = stopwatch.ElapsedTicks;
                     long microSeconds = ((endTicks - startTicks) * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
                     long totalMicroSeconds = (endTicks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
-                    this.vertex.scheduler.WriteLogEntry("{0:D3}.{1:D3} M {2:D7} {3:D11} {4}",
-                        this.vertex.Stage.StageId, this.vertex.VertexId, microSeconds, totalMicroSeconds, upTo);
 
                     Task toPersist = Task.WhenAll(toWait);
                     if (toPersist.IsCompleted)
                     {
+                        this.vertex.scheduler.WriteLogEntry("{0:D3}.{1:D3} MC {2:D7} {3:D11} {4}",
+                            this.vertex.Stage.StageId, this.vertex.VertexId, microSeconds, totalMicroSeconds, upTo);
                         this.SendUpdate(this.lastCheckpoint, false);
                     }
                     else
@@ -856,6 +856,9 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                         {
                             throw new ApplicationException("No persistence but had to wait");
                         }
+
+                        this.vertex.scheduler.WriteLogEntry("{0:D3}.{1:D3} MW {2:D7} {3:D11} {4}",
+                            this.vertex.Stage.StageId, this.vertex.VertexId, microSeconds, totalMicroSeconds, upTo);
 
                         this.awaitingPersistence.Add(this.lastCheckpoint, false);
 

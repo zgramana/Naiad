@@ -372,7 +372,7 @@ namespace Microsoft.Research.Naiad
                 {
                     string fileName = String.Format("controller.{0:D3}.log",
                         this.Configuration.ProcessID);
-                    checkpointLog = this.Configuration.LogStreamFactory(fileName);
+                    checkpointLog = this.Configuration.LogStreamFactory(fileName).Log;
                 }
                 return checkpointLog;
             }

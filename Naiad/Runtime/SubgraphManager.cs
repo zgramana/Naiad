@@ -1228,6 +1228,18 @@ namespace Microsoft.Research.Naiad
             // wait until the updates have been sent
             this.WaitForQuiescence(maxQueued);
 
+            // remove the fake holds from the inputs now that progress has been repaired
+            inputHolds.Clear();
+            foreach (InputStage input in this.inputs)
+            {
+                int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
+                foreach (var time in input.InitialTimes)
+                {
+                    inputHolds.Add(time, -numberOfLocalInputs);
+                }
+            }
+            this.progressTracker.Aggregator.OnRecv(inputHolds);
+
             this.progressTracker.ForceFlush();
 
             long totalTicks = stopwatch.ElapsedTicks;
@@ -1272,12 +1284,6 @@ namespace Microsoft.Research.Naiad
             // wait until all the replays have completed
             this.WaitForQuiescence(maxQueued);
 
-            // it's ok to add new inputs again
-            foreach (InputStage input in this.inputs)
-            {
-                input.ReleaseExternalCalls();
-            }
-
             foreach (var scheduler in this.stages.Values
                 .SelectMany(s => s.Vertices)
                 .Select(v => v.Scheduler)
@@ -1286,23 +1292,29 @@ namespace Microsoft.Research.Naiad
                 scheduler.StopRestoring();
             }
 
-            Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp, long>();
-            // remove the fake holds from the inputs now that progress has been repaired
-            foreach (InputStage input in this.inputs)
-            {
-                int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
-                foreach (var time in input.InitialTimes)
-                {
-                    inputHolds.Add(time, -numberOfLocalInputs);
-                }
-            }
-            this.progressTracker.Aggregator.OnRecv(inputHolds);
+            //Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp, long>();
+            //// remove the fake holds from the inputs now that progress has been repaired
+            //foreach (InputStage input in this.inputs)
+            //{
+            //    int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
+            //    foreach (var time in input.InitialTimes)
+            //    {
+            //        inputHolds.Add(time, -numberOfLocalInputs);
+            //    }
+            //}
+            //this.progressTracker.Aggregator.OnRecv(inputHolds);
 
-            this.progressTracker.ForceFlush();
+            //this.progressTracker.ForceFlush();
 
             StringWriter w = new StringWriter();
             this.progressTracker.Complain(w);
             Console.WriteLine(w);
+
+            // it's ok to add new inputs again
+            foreach (InputStage input in this.inputs)
+            {
+                input.ReleaseExternalCalls();
+            }
         }
 
         public void RestartAfterRollback()

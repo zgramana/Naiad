@@ -146,17 +146,17 @@ function Naiad-PrepareVMs
 
         $jobs = $portRules | ForEach-Object {
 			Invoke-Command -AsJob -ComputerName $dnsName -Port $_.FrontendPort -ScriptBlock {
-				netsh firewall add portopening TCP 2101 "Naiad"
+				netsh advfirewall firewall add rule name="Naiad" dir=in action=allow protocol=TCP localport=2101
 
 		        Set-Item WSMan:\localhost\Shell\MaxMemoryPerShellMB 16000 -Force
 			    Set-Item WSMan:\localhost\Plugin\microsoft.powershell\Quotas\MaxMemoryPerShellMB 16000
     
 			    Restart-Service winrm
-			} -Credential $accountInformation.credential -UseSSL -ArgumentList $processname
+			} -Credential $accountInformation.credential -UseSSL
 		}
 
         Wait-Job $jobs
-		Receive-Job $jobs
+		$jobs
     }
 }
 
