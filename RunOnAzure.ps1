@@ -24,6 +24,43 @@ $outputMap[25] | Select-String -AllMatches -Pattern "Received shutdown message f
 
 Naiad-StopAzureProcess Twiral $accountInformation
 
+function deploy-ft
+{
+    [CmdletBinding()]
+    param (
+        [parameter(Mandatory=$true)]
+        [NaiadAccounts]$accountInformation
+    )
+    PROCESS {
+
+		$pathToExecutable = "C:\users\misard\src\Naiad\FaultToleranceExamples\bin\x64\Release"
+
+		$guid = Naiad-PrepareJob $pathToExecutable $accountInformation
+		$deployJobs = Naiad-DeployJob $guid $accountInformation
+		$waited = Wait-Job $deployJobs
+		$guid
+    }
+}
+
+function deploy-ft-src
+{
+    [CmdletBinding()]
+    param (
+        [parameter(Mandatory=$true)]
+        [NaiadAccounts]$accountInformation
+    )
+    PROCESS {
+
+		$pathToExecutable = "C:\users\misard\src\Naiad"
+
+		$guid = Naiad-PrepareJob $pathToExecutable $accountInformation
+		$deployJobs = Naiad-DeployJob $guid $accountInformation
+		$waited = Wait-Job $deployJobs
+		$guid
+    }
+}
+
+
 Add-Type @'
 public class NaiadAccounts
 {

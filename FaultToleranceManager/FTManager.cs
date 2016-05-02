@@ -262,13 +262,30 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             ++this.epoch;
         }
 
+        private class EnumerableConcatter<T>
+        {
+            private List<T> elements = new List<T>();
+
+            public void ConcatInPlace(IEnumerable<T> additional)
+            {
+                this.elements.AddRange(additional);
+            }
+
+            public IEnumerable<T> Get()
+            {
+                var ret = this.elements;
+                this.elements = null;
+                return ret;
+            }
+        }
+
         private void AddChangesFromUpdate(
             CheckpointUpdate update,
             int updateWeight,
-            ref IEnumerable<Weighted<Checkpoint>> checkpointChanges,
-            ref IEnumerable<Weighted<Notification>> notificationChanges,
-            ref IEnumerable<Weighted<DeliveredMessage>> deliveredMessageChanges,
-            ref IEnumerable<Weighted<DiscardedMessage>> discardedMessageChanges)
+            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges,
+            EnumerableConcatter<Weighted<Notification>> notificationChanges,
+            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges,
+            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges)
         {
             Stage stage = this.stages[update.stageId];
             SV node = new SV { StageId = update.stageId, VertexId = update.vertexId };
@@ -339,7 +356,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     this.WriteLog(node.StageId + "." + node.VertexId + " " + oldFrontier + "->" + update.frontier + " AC");
                 }
 
-                checkpointChanges = checkpointChanges.Concat(new Weighted<Checkpoint>[]
+                checkpointChanges.ConcatInPlace(new Weighted<Checkpoint>[]
                     {
                         new Weighted<Checkpoint>(new Checkpoint {
                             node = node, checkpoint = update.frontier, downwardClosed = true }, 1),
@@ -366,7 +383,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                 }
 
-                checkpointChanges = checkpointChanges.Concat(new Weighted<Checkpoint>[]
+                checkpointChanges.ConcatInPlace(new Weighted<Checkpoint>[]
                     {
                         new Weighted<Checkpoint>(new Checkpoint {
                             node = node, checkpoint = update.frontier, downwardClosed = false }, updateWeight)
@@ -405,8 +422,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                 }
             }
-            deliveredMessageChanges = deliveredMessageChanges
-                .Concat(messages.Select(m => new Weighted<DeliveredMessage>(m, updateWeight)));
+            deliveredMessageChanges
+                .ConcatInPlace(messages.Select(m => new Weighted<DeliveredMessage>(m, updateWeight)));
 
             if (!update.isTemporary)
             {
@@ -423,8 +440,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                 }
             }
-            notificationChanges = notificationChanges
-                .Concat(update.notifications.Select(time =>
+            notificationChanges
+                .ConcatInPlace(update.notifications.Select(time =>
                     new Weighted<Notification>(new Notification { node = node, time = new LexStamp { time = time } }, updateWeight)));
 
             IEnumerable<DiscardedMessage> discarded =
@@ -471,23 +488,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                 }
             }
-            discardedMessageChanges = discardedMessageChanges.
-                Concat(discarded.Select(m => new Weighted<DiscardedMessage>(m, updateWeight)));
+            discardedMessageChanges.
+                ConcatInPlace(discarded.Select(m => new Weighted<DiscardedMessage>(m, updateWeight)));
 
             this.nodeState[node] = state;
         }
 
-        private void InjectChangesFromComputedUpdate(
-            SV node, FTFrontier oldFrontier, FTFrontier newFrontier, bool isLowWatermark,
-            ref IEnumerable<Weighted<Checkpoint>> checkpointChanges,
-            ref IEnumerable<Weighted<Notification>> notificationChanges,
-            ref IEnumerable<Weighted<DeliveredMessage>> deliveredMessageChanges,
-            ref IEnumerable<Weighted<DiscardedMessage>> discardedMessageChanges,
-            HashSet<int> newStageFrontiers
-            )
+        private void HandleCheckpointChanges(
+            SV node, ref NodeState state, FTFrontier newFrontier, bool isLowWatermark,
+            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges)
         {
-            NodeState state = this.nodeState[node];
-
             var thisCheckpoints = state.checkpoints
                 .Where(c => !newFrontier.Equals(c) &&
                             isLowWatermark == newFrontier.Contains(c))
@@ -525,8 +535,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             this.WriteLog(node.StageId + "." + node.VertexId + " " + thisCheckpoints[0] + "->" + newFrontier + " RC");
                         }
 
-                        checkpointChanges = checkpointChanges
-                            .Concat(new Weighted<Checkpoint>[] {
+                        checkpointChanges.ConcatInPlace(new Weighted<Checkpoint>[] {
                                 new Weighted<Checkpoint>(
                                     new Checkpoint { node = node, checkpoint = newFrontier, downwardClosed = true }, 1),
                                 new Weighted<Checkpoint>(
@@ -536,10 +545,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
             else
             {
-                checkpointChanges = checkpointChanges
-                    .Concat(thisCheckpoints
+                bool dc = state.downwardClosed;
+                checkpointChanges.ConcatInPlace(thisCheckpoints
                         .Select(c => new Weighted<Checkpoint>(
-                            new Checkpoint { node = node, checkpoint = c, downwardClosed = state.downwardClosed }, -1)));
+                            new Checkpoint { node = node, checkpoint = c, downwardClosed = dc }, -1)));
                 foreach (var c in thisCheckpoints)
                 {
                     state.checkpoints.Remove(c);
@@ -549,12 +558,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                 }
             }
+        }
 
+        private void HandleNotificationChanges(
+            SV node, ref NodeState state, FTFrontier newFrontier, bool isLowWatermark,
+            EnumerableConcatter<Weighted<Notification>> notificationChanges)
+        {
             var thisNotifications = state.deliveredNotifications
                 .Where(n => isLowWatermark == newFrontier.Contains(n))
                 .ToArray();
-            notificationChanges = notificationChanges
-                .Concat(thisNotifications
+            notificationChanges.ConcatInPlace(thisNotifications
                     .Select(n => new Weighted<Notification>(
                         new Notification { node = node, time = new LexStamp { time = n } }, -1)));
             foreach (var n in thisNotifications)
@@ -565,12 +578,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     this.WriteLog(node.StageId + "." + node.VertexId + " " + n.Timestamp + " RN");
                 }
             }
+        }
 
+        private void HandleDeliveredMessageChanges(
+            SV node, ref NodeState state, FTFrontier newFrontier, bool isLowWatermark,
+            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges)
+        {
             var thisDeliveredMessages = state.deliveredMessages
                 .Where(m => isLowWatermark == newFrontier.Contains(m.Key))
                 .ToArray();
-            deliveredMessageChanges = deliveredMessageChanges
-                .Concat(thisDeliveredMessages
+            deliveredMessageChanges.ConcatInPlace(thisDeliveredMessages
                     .SelectMany(t => t.Value
                         .Select(m => new Weighted<DeliveredMessage>(
                             new DeliveredMessage
@@ -589,7 +606,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 }
                 state.deliveredMessages.Remove(m.Key);
             }
+        }
 
+        private void HandleDiscardedMessageChanges(
+            SV node, ref NodeState state, FTFrontier newFrontier, FTFrontier oldFrontier, bool isLowWatermark,
+            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges, HashSet<int> newStageFrontiers)
+        {
             if (isLowWatermark)
             {
                 this.RemoveStageFrontier(node.StageId, oldFrontier);
@@ -614,8 +636,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             .Where(srcTime => srcTime.Value.Length > 0)
                             .ToArray();
 
-                        discardedMessageChanges = discardedMessageChanges
-                            .Concat(staleDiscarded
+                        discardedMessageChanges.ConcatInPlace(staleDiscarded
                                 .SelectMany(srcTime => srcTime.Value
                                     .Select(dst => new Weighted<DiscardedMessage>(
                                         new DiscardedMessage
@@ -662,8 +683,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 var thisDiscardedMessages = state.discardedMessages
                     .Where(m => !newFrontier.Contains(m.Key))
                     .ToArray();
-                discardedMessageChanges = discardedMessageChanges
-                    .Concat(thisDiscardedMessages
+                discardedMessageChanges.ConcatInPlace(thisDiscardedMessages
                         .SelectMany(srcTime => srcTime.Value
                             .Select(dst => new Weighted<DiscardedMessage>(
                                 new DiscardedMessage
@@ -684,16 +704,35 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     state.discardedMessages.Remove(m.Key);
                 }
             }
+        }
+
+        private void InjectChangesFromComputedUpdate(
+            SV node, FTFrontier oldFrontier, FTFrontier newFrontier, bool isLowWatermark,
+            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges,
+            EnumerableConcatter<Weighted<Notification>> notificationChanges,
+            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges,
+            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges,
+            HashSet<int> newStageFrontiers
+            )
+        {
+            NodeState state = this.nodeState[node];
+
+            HandleCheckpointChanges(node, ref state, newFrontier, isLowWatermark, checkpointChanges);
+            HandleNotificationChanges(node, ref state, newFrontier, isLowWatermark, notificationChanges);
+            HandleDeliveredMessageChanges(node, ref state, newFrontier, isLowWatermark, deliveredMessageChanges);
+            HandleDiscardedMessageChanges(
+                node, ref state, newFrontier, oldFrontier, isLowWatermark,
+                discardedMessageChanges, newStageFrontiers);
 
             this.nodeState[node] = state;
         }
 
         private bool AddChangesFromComputedUpdate(
             IGrouping<SV, Weighted<Frontier>> computedUpdate,
-            ref IEnumerable<Weighted<Checkpoint>> checkpointChanges,
-            ref IEnumerable<Weighted<Notification>> notificationChanges,
-            ref IEnumerable<Weighted<DeliveredMessage>> deliveredMessageChanges,
-            ref IEnumerable<Weighted<DiscardedMessage>> discardedMessageChanges,
+            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges,
+            EnumerableConcatter<Weighted<Notification>> notificationChanges,
+            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges,
+            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges,
             List<CheckpointLowWatermark> gcUpdates,
             HashSet<int> newStageUpdates)
         {
@@ -773,7 +812,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
 
             this.InjectChangesFromComputedUpdate(node, oldRestoration, state.currentRestoration, true,
-                ref checkpointChanges, ref notificationChanges, ref deliveredMessageChanges, ref discardedMessageChanges, newStageUpdates);
+                checkpointChanges, notificationChanges, deliveredMessageChanges, discardedMessageChanges, newStageUpdates);
 
             return true;
         }
@@ -783,10 +822,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             IEnumerable<Weighted<Frontier>> changes,
             bool sendGCUpdates)
         {
-            IEnumerable<Weighted<Checkpoint>> checkpointChanges = new Weighted<Checkpoint>[0];
-            IEnumerable<Weighted<Notification>> notificationChanges = new Weighted<Notification>[0];
-            IEnumerable<Weighted<DeliveredMessage>> deliveredMessageChanges = new Weighted<DeliveredMessage>[0];
-            IEnumerable<Weighted<DiscardedMessage>> discardedMessageChanges = new Weighted<DiscardedMessage>[0];
+            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges = new EnumerableConcatter<Weighted<Checkpoint>>();
+            EnumerableConcatter<Weighted<Notification>> notificationChanges = new EnumerableConcatter<Weighted<Notification>>();
+            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges = new EnumerableConcatter<Weighted<DeliveredMessage>>();
+            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges = new EnumerableConcatter<Weighted<DiscardedMessage>>();
             List<CheckpointLowWatermark> gcUpdates;
             HashSet<int> newStageUpdates = new HashSet<int>();
             
@@ -807,7 +846,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             {
                 this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + (update.isTemporary ? "TA" : "UA"));
                 this.AddChangesFromUpdate(update, 1,
-                    ref checkpointChanges, ref notificationChanges, ref deliveredMessageChanges, ref discardedMessageChanges);
+                    checkpointChanges, notificationChanges, deliveredMessageChanges, discardedMessageChanges);
                 didAnything = true;
             }
 
@@ -829,7 +868,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 foreach (IGrouping<SV, Weighted<Frontier>> computedUpdate in changes.GroupBy(c => c.record.node))
                 {
                     didAnything = this.AddChangesFromComputedUpdate(computedUpdate,
-                        ref checkpointChanges, ref notificationChanges, ref deliveredMessageChanges, ref discardedMessageChanges,
+                        checkpointChanges, notificationChanges, deliveredMessageChanges, discardedMessageChanges,
                         gcUpdates, newStageUpdates)
                         || didAnything;
                 }
@@ -865,10 +904,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 this.WriteLog("START");
 
-                this.checkpointStream.OnNext(checkpointChanges);
-                this.deliveredNotifications.OnNext(notificationChanges);
-                this.deliveredMessages.OnNext(deliveredMessageChanges);
-                this.discardedMessages.OnNext(discardedMessageChanges);
+                this.checkpointStream.OnNext(checkpointChanges.Get());
+                this.deliveredNotifications.OnNext(notificationChanges.Get());
+                this.deliveredMessages.OnNext(deliveredMessageChanges.Get());
+                this.discardedMessages.OnNext(discardedMessageChanges.Get());
 
                 ++this.epoch;
             }
@@ -878,16 +917,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         private void InjectRollbackUpdates(IEnumerable<CheckpointUpdate> updates)
         {
-            IEnumerable<Weighted<Checkpoint>> checkpointChanges = new Weighted<Checkpoint>[0];
-            IEnumerable<Weighted<Notification>> notificationChanges = new Weighted<Notification>[0];
-            IEnumerable<Weighted<DeliveredMessage>> deliveredMessageChanges = new Weighted<DeliveredMessage>[0];
-            IEnumerable<Weighted<DiscardedMessage>> discardedMessageChanges = new Weighted<DiscardedMessage>[0];
+            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges = new EnumerableConcatter<Weighted<Checkpoint>>();
+            EnumerableConcatter<Weighted<Notification>> notificationChanges = new EnumerableConcatter<Weighted<Notification>>();
+            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges = new EnumerableConcatter<Weighted<DeliveredMessage>>();
+            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges = new EnumerableConcatter<Weighted<DiscardedMessage>>();
 
             foreach (CheckpointUpdate update in updates)
             {
                 this.AddChangesFromUpdate(
                     update, -1,
-                    ref checkpointChanges, ref notificationChanges, ref deliveredMessageChanges, ref discardedMessageChanges);
+                    checkpointChanges, notificationChanges, deliveredMessageChanges, discardedMessageChanges);
             }
 
             foreach (KeyValuePair<SV, CheckpointLowWatermark> rollback in this.rollbackFrontiers)
@@ -895,14 +934,14 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 if (!rollback.Value.frontier.Complete)
                 {
                     this.InjectChangesFromComputedUpdate(rollback.Key, new FTFrontier(false), rollback.Value.frontier, false,
-                        ref checkpointChanges, ref notificationChanges, ref deliveredMessageChanges, ref discardedMessageChanges, null);
+                        checkpointChanges, notificationChanges, deliveredMessageChanges, discardedMessageChanges, null);
                 }
             }
 
-            this.checkpointStream.OnNext(checkpointChanges);
-            this.deliveredNotifications.OnNext(notificationChanges);
-            this.deliveredMessages.OnNext(deliveredMessageChanges);
-            this.discardedMessages.OnNext(discardedMessageChanges);
+            this.checkpointStream.OnNext(checkpointChanges.Get());
+            this.deliveredNotifications.OnNext(notificationChanges.Get());
+            this.deliveredMessages.OnNext(deliveredMessageChanges.Get());
+            this.discardedMessages.OnNext(discardedMessageChanges.Get());
 
             ++this.epoch;
         }

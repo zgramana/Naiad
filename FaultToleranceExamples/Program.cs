@@ -1673,11 +1673,17 @@ namespace FaultToleranceExamples
 
             bool useAzure = false;
             string logPrefix = "";
+            int debugProcess = -1;
             int i = 0;
             while (i < args.Length)
             {
                 switch (args[i].ToLower())
                 {
+                    case "-debug":
+                        debugProcess = Int32.Parse(args[i + 1]);
+                        i += 2;
+                        break;
+
                     case "-azure":
                         useAzure = true;
                         ++i;
@@ -1698,6 +1704,16 @@ namespace FaultToleranceExamples
                         i += 2;
                         break;
                 }
+            }
+
+            if (this.config.ProcessID == debugProcess)
+            {
+                Console.WriteLine("Waiting for debugger");
+                while (!System.Diagnostics.Debugger.IsAttached)
+                {
+                    System.Threading.Thread.Sleep(500);
+                }
+                Console.WriteLine("Attached to debugger");
             }
 
             System.IO.Directory.CreateDirectory(logPrefix);
@@ -1767,20 +1783,20 @@ namespace FaultToleranceExamples
 
                 if (this.config.ProcessID == fpBase)
                 {
-                    var stopwatch = computation.Controller.Stopwatch;
-                    HashSet<Pointstamp> previousFrontier = new HashSet<Pointstamp>();
-                    computation.OnFrontierChange += (x, y) =>
-                    {
-                        long ticks = stopwatch.ElapsedTicks;
-                        long microSeconds = (ticks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
-                        HashSet<Pointstamp> newSet = new HashSet<Pointstamp>();
-                        foreach (var f in y.NewFrontier) { newSet.Add(f); }
-                        var added = newSet.Where(f => !previousFrontier.Contains(f));
-                        var removed = previousFrontier.Where(f => !newSet.Contains(f));
-                        Console.WriteLine(String.Format("{0:D11}\t", microSeconds) + " +" + string.Join(", ", added) + " -" + string.Join(", ", removed));
-                        Console.Out.Flush();
-                        previousFrontier = newSet;
-                    };
+                    //var stopwatch = computation.Controller.Stopwatch;
+                    //HashSet<Pointstamp> previousFrontier = new HashSet<Pointstamp>();
+                    //computation.OnFrontierChange += (x, y) =>
+                    //{
+                    //    long ticks = stopwatch.ElapsedTicks;
+                    //    long microSeconds = (ticks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
+                    //    HashSet<Pointstamp> newSet = new HashSet<Pointstamp>();
+                    //    foreach (var f in y.NewFrontier) { newSet.Add(f); }
+                    //    var added = newSet.Where(f => !previousFrontier.Contains(f));
+                    //    var removed = previousFrontier.Where(f => !newSet.Contains(f));
+                    //    Console.WriteLine(String.Format("{0:D11}\t", microSeconds) + " +" + string.Join(", ", added) + " -" + string.Join(", ", removed));
+                    //    Console.Out.Flush();
+                    //    previousFrontier = newSet;
+                    //};
                     computation.OnStageStable += this.ReactToStable;
                     this.StartBatches();
                 }

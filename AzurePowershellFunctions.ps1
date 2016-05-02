@@ -101,7 +101,6 @@ function Naiad-DeployJob
         $bloburi = $blob.ICloudBlob.Uri
 
         # for each VM, if the zip file isn't already there, download it
-        $deployJobs = @()
         $portRules | ForEach-Object {
 			Invoke-Command -ScriptBlock { 
 				$bloburi = $args[0]
@@ -120,7 +119,7 @@ function Naiad-DeployJob
 				{
 					wget $args[0] -UseBasicParsing -OutFile "C:\temp\$guid.zip"
 					$a = [Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem")
-					[System.IO.Compression.ZipFile]::ExtractToDirectory("C:\temp\$guid.zip", "C:\temp\$guid\")
+					$d = [System.IO.Compression.ZipFile]::ExtractToDirectory("C:\temp\$guid.zip", "C:\temp\$guid\")
 				}
 				"done";
 			} -ComputerName $dnsName -Port $_.FrontendPort -UseSSL -AsJob -Credential $accountInformation.credential -ArgumentList $bloburi, $guid
@@ -234,12 +233,37 @@ function Naiad-ExecuteJob
     }
 }
 
+function Naiad-FetchFile
+{
+    [CmdletBinding()]
+    param (
+        [parameter(Mandatory=$true)]
+        [string]$guid,
+        [parameter(Mandatory=$true)]
+        [NaiadAccounts]$accountInformation,
+        [parameter(Mandatory=$true)]
+        [int]$processId,
+        [parameter(Mandatory=$true)]
+        [string]$fileName
+    )
+    PROCESS {
+		$rg = $accountInformation.resourceGroupName;
+
+		$dnsName = (Get-AzureRmPublicIpAddress -ResourceGroupName $rg).DnsSettings.Fqdn;
+        $portRules = (Get-AzureRmLoadBalancer -ResourceGroupName $rg).InboundNatRules | where -Property BackendPort -EQ 5986
+		$remoteName = "C:\temp\" + $guid + "\log\" + $fileName
+        Invoke-Command -ComputerName $dnsName -Port $portRules[$processId].FrontendPort -ScriptBlock {
+				$remoteName = $args[0]
+				Get-Content $remoteName
+			} -Credential $accountInformation.credential -UseSSL -ArgumentList $remoteName
+    }
+}
+
 # stop all the processes with a given name on the VMs
 function Naiad-StopAzureProcess
 {
     [CmdletBinding()]
     param (
-
         [parameter(Mandatory=$true)]
         [string]$processname,
         [parameter(Mandatory=$true)]
