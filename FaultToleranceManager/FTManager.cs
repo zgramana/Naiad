@@ -53,7 +53,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public HashSet<FTFrontier> checkpoints;
         public Dictionary<Pointstamp, int[]> deliveredMessages;
         public HashSet<Pointstamp> deliveredNotifications;
-        public Dictionary<Pointstamp, Pair<int, Pointstamp>[]> discardedMessages;
+        //public Dictionary<Pointstamp, Pair<int, Pointstamp>[]> discardedMessages;
+        /// <summary>
+        /// Key is downstream stage ID. For each downstream stage, dictionary is keyed on downstream time;
+        /// for each downstream time dt there is a set of upstream times that discarded a message sent to dt.
+        /// </summary>
+        public Dictionary<int, SortedDictionary<LexStamp, SortedSet<LexStamp>>> ndm;
 
         public NodeState(bool downwardClosed, int gcUpdateSendVertexId)
         {
@@ -65,7 +70,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             this.checkpoints.Add(currentRestoration);
             this.deliveredMessages = new Dictionary<Pointstamp, int[]>();
             this.deliveredNotifications = new HashSet<Pointstamp>();
-            this.discardedMessages = new Dictionary<Pointstamp, Pair<int, Pointstamp>[]>();
+            //this.discardedMessages = new Dictionary<Pointstamp, Pair<int, Pointstamp>[]>();
+            this.ndm = new Dictionary<int, SortedDictionary<LexStamp, SortedSet<LexStamp>>>();
         }
     }
 
@@ -236,7 +242,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             foreach (Pair<int, SV[]> edgeList in args.edges
                 .Select(e => new SV { StageId = e.First.First, VertexId = e.First.Second }.PairWith(e.Second.First))
                 .GroupBy(e => e.Second)
-                .Select(e => e.Key.PairWith(e.Select(ee => ee.First).ToArray())))
+                .Select(e => e.Key.PairWith(e.Select(ee => ee.First).Distinct().ToArray())))
             {
                 this.upstreamStage.Add(edgeList.First, edgeList.Second);
             }
@@ -244,6 +250,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             foreach (int stage in this.nodeState.Keys.Select(sv => sv.StageId).Distinct().Where(n => !this.upstreamStage.ContainsKey(n)))
             {
                 this.upstreamStage.Add(stage, new SV[0]);
+            }
+
+            foreach (Pair<SV, int> edgeList in args.edges
+                .Select(e => new SV { StageId = e.First.First, VertexId = e.First.Second }.PairWith(e.Second.First))
+                .Distinct())
+            {
+                this.nodeState[edgeList.First].ndm.Add(edgeList.Second, new SortedDictionary<LexStamp, SortedSet<LexStamp>>());
             }
 
             this.graph.OnNext(args.edges.Select(e => new Edge
@@ -262,30 +275,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             ++this.epoch;
         }
 
-        private class EnumerableConcatter<T>
-        {
-            private List<T> elements = new List<T>();
-
-            public void ConcatInPlace(IEnumerable<T> additional)
-            {
-                this.elements.AddRange(additional);
-            }
-
-            public IEnumerable<T> Get()
-            {
-                var ret = this.elements;
-                this.elements = null;
-                return ret;
-            }
-        }
-
         private void AddChangesFromUpdate(
             CheckpointUpdate update,
             int updateWeight,
-            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges,
-            EnumerableConcatter<Weighted<Notification>> notificationChanges,
-            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges,
-            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges)
+            List<Weighted<Checkpoint>> checkpointChanges,
+            List<Weighted<Notification>> notificationChanges,
+            List<Weighted<DeliveredMessage>> deliveredMessageChanges,
+            List<Weighted<DiscardedMessage>> discardedMessageChanges)
         {
             Stage stage = this.stages[update.stageId];
             SV node = new SV { StageId = update.stageId, VertexId = update.vertexId };
@@ -356,7 +352,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     this.WriteLog(node.StageId + "." + node.VertexId + " " + oldFrontier + "->" + update.frontier + " AC");
                 }
 
-                checkpointChanges.ConcatInPlace(new Weighted<Checkpoint>[]
+                checkpointChanges.AddRange(new Weighted<Checkpoint>[]
                     {
                         new Weighted<Checkpoint>(new Checkpoint {
                             node = node, checkpoint = update.frontier, downwardClosed = true }, 1),
@@ -383,7 +379,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                 }
 
-                checkpointChanges.ConcatInPlace(new Weighted<Checkpoint>[]
+                checkpointChanges.AddRange(new Weighted<Checkpoint>[]
                     {
                         new Weighted<Checkpoint>(new Checkpoint {
                             node = node, checkpoint = update.frontier, downwardClosed = false }, updateWeight)
@@ -423,7 +419,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 }
             }
             deliveredMessageChanges
-                .ConcatInPlace(messages.Select(m => new Weighted<DeliveredMessage>(m, updateWeight)));
+                .AddRange(messages.Select(m => new Weighted<DeliveredMessage>(m, updateWeight)));
 
             if (!update.isTemporary)
             {
@@ -441,62 +437,108 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 }
             }
             notificationChanges
-                .ConcatInPlace(update.notifications.Select(time =>
+                .AddRange(update.notifications.Select(time =>
                     new Weighted<Notification>(new Notification { node = node, time = new LexStamp { time = time } }, updateWeight)));
 
-            IEnumerable<DiscardedMessage> discarded =
-                update.discardedMessages.SelectMany(dstStage =>
-                    dstStage.Second.SelectMany(nodeTimes =>
-                        nodeTimes.Second
-                            .Where(dstTime => !this.StageFrontier(dstStage.First).Contains(dstTime))
-                            // don't bother keeping track of discarded messages that are already contained
-                            // in the destination's restoration frontier
-                            .Select(dstTime =>
-                                new DiscardedMessage
-                                {
-                                    edge = new Edge
-                                    {
-                                        src = node,
-                                        dst = new SV { StageId = dstStage.First, VertexId = -1 }
-                                    },
-                                    srcTime = new LexStamp { time = nodeTimes.First },
-                                    dstTime = new LexStamp { time = dstTime }
-                                })));
+            //IEnumerable<DiscardedMessage> discarded =
+            //    update.discardedMessages.SelectMany(dstStage =>
+            //        dstStage.Second.SelectMany(nodeTimes =>
+            //            nodeTimes.Second
+            //                .Distinct()
+            //                .Where(dstTime => !this.StageFrontier(dstStage.First).Contains(dstTime))
+            //                // don't bother keeping track of discarded messages that are already contained
+            //                // in the destination's restoration frontier
+            //                .Select(dstTime =>
+            //                    new DiscardedMessage
+            //                    {
+            //                        edge = new Edge
+            //                        {
+            //                            src = node,
+            //                            dst = new SV { StageId = dstStage.First, VertexId = -1 }
+            //                        },
+            //                        srcTime = new LexStamp { time = nodeTimes.First },
+            //                        dstTime = new LexStamp { time = dstTime }
+            //                    })));
 
-            if (!update.isTemporary)
+            //if (!update.isTemporary)
+            //{
+                //foreach (var srcGroup in update.discardedMessages
+                //    .SelectMany(dstStage =>
+                //        dstStage.Second.Select(nodeTimes => nodeTimes.First.PairWith(dstStage.First.PairWith(nodeTimes.Second))))
+                //    .GroupBy(srcTime => srcTime.First))
+                //{
+                //    if (state.currentRestoration.Contains(srcGroup.Key))
+                //    {
+                //        throw new ApplicationException("Stale Discarded message");
+                //    }
+
+                //    var dsts = srcGroup.SelectMany(srcTime => srcTime.Second.Second
+                //        .Select(dstTime => srcTime.Second.First.PairWith(dstTime)))
+                //        .ToArray();
+                //    state.discardedMessages.Add(srcGroup.Key, dsts);
+                //    if (this.debugLog)
+                //    {
+                //        foreach (var dst in dsts)
+                //        {
+                //            this.WriteLog(node.StageId + "." + node.VertexId + " " + srcGroup.Key + "->" + dst.First + "." + dst.Second.Timestamp + " AD");
+                //        }
+                //    }
+                //}
+
+            foreach (var downstreamStage in update.discardedMessages)
             {
-                foreach (var srcGroup in update.discardedMessages
-                    .SelectMany(dstStage =>
-                        dstStage.Second.Select(nodeTimes => nodeTimes.First.PairWith(dstStage.First.PairWith(nodeTimes.Second))))
-                    .GroupBy(srcTime => srcTime.First))
+                var dstFrontier = this.StageFrontier(downstreamStage.First);
+                var stageTimes = state.ndm[downstreamStage.First];
+                foreach (var upstreamTime in downstreamStage.Second)
                 {
-                    if (state.currentRestoration.Contains(srcGroup.Key))
+                    if (state.currentRestoration.Contains(upstreamTime.First))
                     {
                         throw new ApplicationException("Stale Discarded message");
                     }
-
-                    var dsts = srcGroup.SelectMany(srcTime => srcTime.Second.Second
-                        .Select(dstTime => srcTime.Second.First.PairWith(dstTime)))
-                        .ToArray();
-                    state.discardedMessages.Add(srcGroup.Key, dsts);
-                    if (this.debugLog)
+                    foreach (var downstreamTime in upstreamTime.Second.Distinct())
                     {
-                        foreach (var dst in dsts)
+                        if (!dstFrontier.Contains(downstreamTime))
                         {
-                            this.WriteLog(node.StageId + "." + node.VertexId + " " + srcGroup.Key + "->" + dst.First + "." + dst.Second.Timestamp + " AD");
+                            LexStamp upLex = new LexStamp { time = upstreamTime.First };
+                            LexStamp downLex = new LexStamp { time = downstreamTime };
+                            discardedMessageChanges.Add(new Weighted<DiscardedMessage>(
+                                new DiscardedMessage
+                                {
+                                    edge = new Edge { src = node, dst = new SV(downstreamStage.First, -1) },
+                                    srcTime = upLex,
+                                    dstTime = downLex
+                                }, updateWeight));
+                            if (!update.isTemporary)
+                            {
+                                SortedSet<LexStamp> upstreamTimes;
+                                if (!stageTimes.TryGetValue(downLex, out upstreamTimes))
+                                {
+                                    upstreamTimes = new SortedSet<LexStamp>();
+                                    stageTimes.Add(downLex, upstreamTimes);
+                                }
+                                if (!upstreamTimes.Add(upLex))
+                                {
+                                    throw new ApplicationException("Bad upstream time");
+                                }
+                                if (this.debugLog)
+                                {
+                                    this.WriteLog(node + " " + downLex.time + "->" + downstreamStage.First + "." + downstreamTime.Timestamp);
+                                }
+                            }
                         }
                     }
                 }
             }
-            discardedMessageChanges.
-                ConcatInPlace(discarded.Select(m => new Weighted<DiscardedMessage>(m, updateWeight)));
+            //}
+            //discardedMessageChanges.
+            //    AddRange(discarded.Select(m => new Weighted<DiscardedMessage>(m, updateWeight)));
 
             this.nodeState[node] = state;
         }
 
         private void HandleCheckpointChanges(
             SV node, ref NodeState state, FTFrontier newFrontier, bool isLowWatermark,
-            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges)
+            List<Weighted<Checkpoint>> checkpointChanges)
         {
             var thisCheckpoints = state.checkpoints
                 .Where(c => !newFrontier.Equals(c) &&
@@ -535,7 +577,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             this.WriteLog(node.StageId + "." + node.VertexId + " " + thisCheckpoints[0] + "->" + newFrontier + " RC");
                         }
 
-                        checkpointChanges.ConcatInPlace(new Weighted<Checkpoint>[] {
+                        checkpointChanges.AddRange(new Weighted<Checkpoint>[] {
                                 new Weighted<Checkpoint>(
                                     new Checkpoint { node = node, checkpoint = newFrontier, downwardClosed = true }, 1),
                                 new Weighted<Checkpoint>(
@@ -546,7 +588,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             else
             {
                 bool dc = state.downwardClosed;
-                checkpointChanges.ConcatInPlace(thisCheckpoints
+                checkpointChanges.AddRange(thisCheckpoints
                         .Select(c => new Weighted<Checkpoint>(
                             new Checkpoint { node = node, checkpoint = c, downwardClosed = dc }, -1)));
                 foreach (var c in thisCheckpoints)
@@ -562,12 +604,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         private void HandleNotificationChanges(
             SV node, ref NodeState state, FTFrontier newFrontier, bool isLowWatermark,
-            EnumerableConcatter<Weighted<Notification>> notificationChanges)
+            List<Weighted<Notification>> notificationChanges)
         {
             var thisNotifications = state.deliveredNotifications
                 .Where(n => isLowWatermark == newFrontier.Contains(n))
                 .ToArray();
-            notificationChanges.ConcatInPlace(thisNotifications
+            notificationChanges.AddRange(thisNotifications
                     .Select(n => new Weighted<Notification>(
                         new Notification { node = node, time = new LexStamp { time = n } }, -1)));
             foreach (var n in thisNotifications)
@@ -582,12 +624,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         private void HandleDeliveredMessageChanges(
             SV node, ref NodeState state, FTFrontier newFrontier, bool isLowWatermark,
-            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges)
+            List<Weighted<DeliveredMessage>> deliveredMessageChanges)
         {
             var thisDeliveredMessages = state.deliveredMessages
                 .Where(m => isLowWatermark == newFrontier.Contains(m.Key))
                 .ToArray();
-            deliveredMessageChanges.ConcatInPlace(thisDeliveredMessages
+            deliveredMessageChanges.AddRange(thisDeliveredMessages
                     .SelectMany(t => t.Value
                         .Select(m => new Weighted<DeliveredMessage>(
                             new DeliveredMessage
@@ -610,7 +652,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         private void HandleDiscardedMessageChanges(
             SV node, ref NodeState state, FTFrontier newFrontier, FTFrontier oldFrontier, bool isLowWatermark,
-            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges, HashSet<int> newStageFrontiers)
+            List<Weighted<DiscardedMessage>> discardedMessageChanges, HashSet<int> newStageFrontiers)
         {
             if (isLowWatermark)
             {
@@ -621,58 +663,82 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 {
                     newStageFrontiers.Add(node.StageId);
 
+                    // For each upstream vertex, prune its discarded messages, removing any whose destination timestamp
+                    // is within the new stage frontier.
                     foreach (SV upstream in this.upstreamStage[node.StageId])
                     {
                         NodeState upstreamState = this.nodeState[upstream];
 
-                        var staleDiscarded = upstreamState.discardedMessages
-                            .Select(srcTime =>
-                                new KeyValuePair<Pointstamp, Pair<int, Pointstamp>[]>(
-                                    srcTime.Key,
-                                    srcTime.Value
-                                        .Where(dst =>
-                                            dst.First.Equals(node.StageId) && newStageFrontier.Contains(dst.Second))
-                                        .ToArray()))
-                            .Where(srcTime => srcTime.Value.Length > 0)
-                            .ToArray();
-
-                        discardedMessageChanges.ConcatInPlace(staleDiscarded
-                                .SelectMany(srcTime => srcTime.Value
-                                    .Select(dst => new Weighted<DiscardedMessage>(
+                        var downstreamTimes = upstreamState.ndm[node.StageId];
+                        while (downstreamTimes.Count > 0)
+                        {
+                            var downStreamTime = downstreamTimes.First();
+                            if (newStageFrontier.Contains(downStreamTime.Key.time))
+                            {
+                                discardedMessageChanges.AddRange(downStreamTime.Value.Select(
+                                    upstreamTime => new Weighted<DiscardedMessage>(
                                         new DiscardedMessage
                                         {
-                                            edge = new Edge { src = upstream, dst = new SV(dst.First, -1) },
-                                            srcTime = new LexStamp { time = srcTime.Key },
-                                            dstTime = new LexStamp { time = dst.Second }
-                                        }, -1))));
-
-                        foreach (var staleSrcTime in staleDiscarded)
-                        {
-                            var newSrcMessages = upstreamState.discardedMessages[staleSrcTime.Key]
-                                .Where(dst => !dst.First.Equals(node.StageId) || !newStageFrontier.Contains(dst.Second))
-                                .ToArray();
-
-                            if (this.debugLog)
-                            {
-                                if (staleSrcTime.Value.Length + newSrcMessages.Length != upstreamState.discardedMessages[staleSrcTime.Key].Count())
-                                {
-                                    throw new ApplicationException("wrong discarded messages " + staleSrcTime.Value.Length + "," + newSrcMessages.Length + "," +
-                                        upstreamState.discardedMessages[staleSrcTime.Key].Count());
-                                }
-                                foreach (var m in upstreamState.discardedMessages[staleSrcTime.Key].Except(newSrcMessages))
-                                {
-                                    this.WriteLog(upstream.StageId + "." + upstream.VertexId + " " + m.Second.Timestamp + "->" + m.First + " RD");
-                                }
-                            }
-                            if (newSrcMessages.Length == 0)
-                            {
-                                upstreamState.discardedMessages.Remove(staleSrcTime.Key);
+                                            edge = new Edge { src = upstream, dst = new SV(node.StageId, -1) },
+                                            srcTime = upstreamTime,
+                                            dstTime = downStreamTime.Key
+                                        }, -1)));
+                                downstreamTimes.Remove(downStreamTime.Key);
                             }
                             else
                             {
-                                upstreamState.discardedMessages[staleSrcTime.Key] = newSrcMessages;
+                                break;
                             }
                         }
+
+                        //var staleDiscarded = upstreamState.discardedMessages
+                        //    .Select(srcTime =>
+                        //        new KeyValuePair<Pointstamp, Pair<int, Pointstamp>[]>(
+                        //            srcTime.Key,
+                        //            srcTime.Value
+                        //                .Where(dst =>
+                        //                    dst.First.Equals(node.StageId) && newStageFrontier.Contains(dst.Second))
+                        //                .ToArray()))
+                        //    .Where(srcTime => srcTime.Value.Length > 0)
+                        //    .ToArray();
+
+                        //discardedMessageChanges.AddRange(staleDiscarded
+                        //        .SelectMany(srcTime => srcTime.Value
+                        //            .Select(dst => new Weighted<DiscardedMessage>(
+                        //                new DiscardedMessage
+                        //                {
+                        //                    edge = new Edge { src = upstream, dst = new SV(dst.First, -1) },
+                        //                    srcTime = new LexStamp { time = srcTime.Key },
+                        //                    dstTime = new LexStamp { time = dst.Second }
+                        //                }, -1))));
+
+                        //foreach (var staleSrcTime in staleDiscarded)
+                        //{
+                        //    var newSrcMessages = upstreamState.discardedMessages[staleSrcTime.Key]
+                        //        .Where(dst => !dst.First.Equals(node.StageId) || !newStageFrontier.Contains(dst.Second))
+                        //        .ToArray();
+
+                        //    if (this.debugLog)
+                        //    {
+                        //        if (staleSrcTime.Value.Length + newSrcMessages.Length != upstreamState.discardedMessages[staleSrcTime.Key].Count())
+                        //        {
+                        //            throw new ApplicationException("wrong discarded messages " + staleSrcTime.Value.Length + "," + newSrcMessages.Length + "," +
+                        //                upstreamState.discardedMessages[staleSrcTime.Key].Count());
+                        //        }
+                        //        foreach (var m in upstreamState.discardedMessages[staleSrcTime.Key].Except(newSrcMessages))
+                        //        {
+                        //            this.WriteLog(upstream.StageId + "." + upstream.VertexId + " " + m.Second.Timestamp + "->" + m.First + " RD");
+                        //        }
+                        //    }
+                        //    if (newSrcMessages.Length == 0)
+                        //    {
+                        //        upstreamState.discardedMessages.Remove(staleSrcTime.Key);
+                        //    }
+                        //    else
+                        //    {
+                        //        upstreamState.discardedMessages[staleSrcTime.Key] = newSrcMessages;
+                        //    }
+                        //}
 
                         this.nodeState[upstream] = upstreamState;
                     }
@@ -680,38 +746,66 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
             else
             {
-                var thisDiscardedMessages = state.discardedMessages
-                    .Where(m => !newFrontier.Contains(m.Key))
-                    .ToArray();
-                discardedMessageChanges.ConcatInPlace(thisDiscardedMessages
-                        .SelectMany(srcTime => srcTime.Value
-                            .Select(dst => new Weighted<DiscardedMessage>(
-                                new DiscardedMessage
-                                {
-                                    edge = new Edge { src = node, dst = new SV(dst.First, -1) },
-                                    srcTime = new LexStamp { time = srcTime.Key },
-                                    dstTime = new LexStamp { time = dst.Second }
-                                }, -1))));
-                foreach (var m in thisDiscardedMessages)
+                foreach (var downstreamStage in state.ndm)
                 {
-                    if (this.debugLog)
+                    foreach (var downstreamTime in downstreamStage.Value)
                     {
-                        foreach (var mm in state.discardedMessages[m.Key])
+                        var upstreamTimes = downstreamTime.Value;
+                        while (upstreamTimes.Count > 0)
                         {
-                            this.WriteLog(node.StageId + "." + node.VertexId + " " + mm.Second.Timestamp + "->" + mm.First + " RD");
+                            var upstreamTime = upstreamTimes.Last();
+                            if (!newFrontier.Contains(upstreamTime.time))
+                            {
+                                // If we remove the last downstreamTime don't worry about garbage collecting the upstreamTime since
+                                // it will happen eventually in a low watermark collection.
+                                upstreamTimes.Remove(upstreamTime);
+                                discardedMessageChanges.Add(new Weighted<DiscardedMessage>(
+                                    new DiscardedMessage
+                                    {
+                                        edge = new Edge { src = node, dst = new SV(downstreamStage.Key, -1) },
+                                        srcTime = upstreamTime,
+                                        dstTime = downstreamTime.Key
+                                    }, -1));
+                            }
+                            else
+                            {
+                                break;
+                            }
                         }
                     }
-                    state.discardedMessages.Remove(m.Key);
                 }
+                //var thisDiscardedMessages = state.discardedMessages
+                //    .Where(m => !newFrontier.Contains(m.Key))
+                //    .ToArray();
+                //discardedMessageChanges.AddRange(thisDiscardedMessages
+                //        .SelectMany(srcTime => srcTime.Value
+                //            .Select(dst => new Weighted<DiscardedMessage>(
+                //                new DiscardedMessage
+                //                {
+                //                    edge = new Edge { src = node, dst = new SV(dst.First, -1) },
+                //                    srcTime = new LexStamp { time = srcTime.Key },
+                //                    dstTime = new LexStamp { time = dst.Second }
+                //                }, -1))));
+                //foreach (var m in thisDiscardedMessages)
+                //{
+                //    if (this.debugLog)
+                //    {
+                //        foreach (var mm in state.discardedMessages[m.Key])
+                //        {
+                //            this.WriteLog(node.StageId + "." + node.VertexId + " " + mm.Second.Timestamp + "->" + mm.First + " RD");
+                //        }
+                //    }
+                //    state.discardedMessages.Remove(m.Key);
+                //}
             }
         }
 
         private void InjectChangesFromComputedUpdate(
             SV node, FTFrontier oldFrontier, FTFrontier newFrontier, bool isLowWatermark,
-            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges,
-            EnumerableConcatter<Weighted<Notification>> notificationChanges,
-            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges,
-            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges,
+            List<Weighted<Checkpoint>> checkpointChanges,
+            List<Weighted<Notification>> notificationChanges,
+            List<Weighted<DeliveredMessage>> deliveredMessageChanges,
+            List<Weighted<DiscardedMessage>> discardedMessageChanges,
             HashSet<int> newStageFrontiers
             )
         {
@@ -729,10 +823,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         private bool AddChangesFromComputedUpdate(
             IGrouping<SV, Weighted<Frontier>> computedUpdate,
-            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges,
-            EnumerableConcatter<Weighted<Notification>> notificationChanges,
-            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges,
-            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges,
+            List<Weighted<Checkpoint>> checkpointChanges,
+            List<Weighted<Notification>> notificationChanges,
+            List<Weighted<DeliveredMessage>> deliveredMessageChanges,
+            List<Weighted<DiscardedMessage>> discardedMessageChanges,
             List<CheckpointLowWatermark> gcUpdates,
             HashSet<int> newStageUpdates)
         {
@@ -822,10 +916,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             IEnumerable<Weighted<Frontier>> changes,
             bool sendGCUpdates)
         {
-            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges = new EnumerableConcatter<Weighted<Checkpoint>>();
-            EnumerableConcatter<Weighted<Notification>> notificationChanges = new EnumerableConcatter<Weighted<Notification>>();
-            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges = new EnumerableConcatter<Weighted<DeliveredMessage>>();
-            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges = new EnumerableConcatter<Weighted<DiscardedMessage>>();
+            List<Weighted<Checkpoint>> checkpointChanges = new List<Weighted<Checkpoint>>();
+            List<Weighted<Notification>> notificationChanges = new List<Weighted<Notification>>();
+            List<Weighted<DeliveredMessage>> deliveredMessageChanges = new List<Weighted<DeliveredMessage>>();
+            List<Weighted<DiscardedMessage>> discardedMessageChanges = new List<Weighted<DiscardedMessage>>();
             List<CheckpointLowWatermark> gcUpdates;
             HashSet<int> newStageUpdates = new HashSet<int>();
             
@@ -904,10 +998,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 this.WriteLog("START");
 
-                this.checkpointStream.OnNext(checkpointChanges.Get());
-                this.deliveredNotifications.OnNext(notificationChanges.Get());
-                this.deliveredMessages.OnNext(deliveredMessageChanges.Get());
-                this.discardedMessages.OnNext(discardedMessageChanges.Get());
+                this.checkpointStream.OnNext(checkpointChanges);
+                this.deliveredNotifications.OnNext(notificationChanges);
+                this.deliveredMessages.OnNext(deliveredMessageChanges);
+                this.discardedMessages.OnNext(discardedMessageChanges);
 
                 ++this.epoch;
             }
@@ -917,10 +1011,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         private void InjectRollbackUpdates(IEnumerable<CheckpointUpdate> updates)
         {
-            EnumerableConcatter<Weighted<Checkpoint>> checkpointChanges = new EnumerableConcatter<Weighted<Checkpoint>>();
-            EnumerableConcatter<Weighted<Notification>> notificationChanges = new EnumerableConcatter<Weighted<Notification>>();
-            EnumerableConcatter<Weighted<DeliveredMessage>> deliveredMessageChanges = new EnumerableConcatter<Weighted<DeliveredMessage>>();
-            EnumerableConcatter<Weighted<DiscardedMessage>> discardedMessageChanges = new EnumerableConcatter<Weighted<DiscardedMessage>>();
+            List<Weighted<Checkpoint>> checkpointChanges = new List<Weighted<Checkpoint>>();
+            List<Weighted<Notification>> notificationChanges = new List<Weighted<Notification>>();
+            List<Weighted<DeliveredMessage>> deliveredMessageChanges = new List<Weighted<DeliveredMessage>>();
+            List<Weighted<DiscardedMessage>> discardedMessageChanges = new List<Weighted<DiscardedMessage>>();
 
             foreach (CheckpointUpdate update in updates)
             {
@@ -938,10 +1032,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 }
             }
 
-            this.checkpointStream.OnNext(checkpointChanges.Get());
-            this.deliveredNotifications.OnNext(notificationChanges.Get());
-            this.deliveredMessages.OnNext(deliveredMessageChanges.Get());
-            this.discardedMessages.OnNext(discardedMessageChanges.Get());
+            this.checkpointStream.OnNext(checkpointChanges);
+            this.deliveredNotifications.OnNext(notificationChanges);
+            this.deliveredMessages.OnNext(deliveredMessageChanges);
+            this.discardedMessages.OnNext(discardedMessageChanges);
 
             ++this.epoch;
         }
@@ -1224,7 +1318,6 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                     Console.WriteLine();
 
-
                     Console.Write(" ");
                     foreach (var time in state.Value.deliveredNotifications.OrderBy(t => new LexStamp { time = t }))
                     {
@@ -1244,13 +1337,28 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                     Console.WriteLine();
 
+                    //Console.Write(" ");
+                    //foreach (var time in state.Value.discardedMessages.OrderBy(t => new LexStamp { time = t.Key }))
+                    //{
+                    //    Console.Write(" " + time.Key.Timestamp + ":");
+                    //    foreach (var dst in time.Value.OrderBy(d => new LexStamp { time = d.Second }))
+                    //    {
+                    //        Console.Write(" " + dst.First + "=" + dst.Second.Timestamp);
+                    //    }
+                    //    Console.Write(";");
+                    //}
+                    //Console.WriteLine();
+
                     Console.Write(" ");
-                    foreach (var time in state.Value.discardedMessages.OrderBy(t => new LexStamp { time = t.Key }))
+                    foreach (var stage in state.Value.ndm.OrderBy(t => t.Key))
                     {
-                        Console.Write(" " + time.Key.Timestamp + ":");
-                        foreach (var dst in time.Value.OrderBy(d => new LexStamp { time = d.Second }))
+                        Console.Write(" " + stage.Key + ":");
+                        foreach (var dst in stage.Value)
                         {
-                            Console.Write(" " + dst.First + "=" + dst.Second.Timestamp);
+                            foreach (var src in dst.Value)
+                            {
+                                Console.Write(" " + dst.Key.time.Timestamp + "=" + src.time.Timestamp);
+                            }
                         }
                         Console.Write(";");
                     }

@@ -52,6 +52,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             return this.VertexId + (this.StageId << 16);
         }
+
+        public override string ToString()
+        {
+            return this.StageId + "." + this.VertexId;
+        }
     }
 
     internal struct Edge : IEquatable<Edge>

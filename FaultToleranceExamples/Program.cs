@@ -1817,7 +1817,7 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
-                        System.Threading.Thread.Sleep(Timeout.Infinite);
+                        //System.Threading.Thread.Sleep(Timeout.Infinite);
                         System.Threading.Thread.Sleep(15000);
                         if (this.config.Processes > 2)
                         {
