@@ -1673,6 +1673,7 @@ namespace FaultToleranceExamples
 
             bool useAzure = false;
             string logPrefix = "";
+            int managerWorkerCount = 1;
             int debugProcess = -1;
             int i = 0;
             while (i < args.Length)
@@ -1681,6 +1682,11 @@ namespace FaultToleranceExamples
                 {
                     case "-debug":
                         debugProcess = Int32.Parse(args[i + 1]);
+                        i += 2;
+                        break;
+
+                    case "-mwc":
+                        managerWorkerCount = Int32.Parse(args[i + 1]);
                         i += 2;
                         break;
 
@@ -1774,7 +1780,10 @@ namespace FaultToleranceExamples
 
                 if (this.config.ProcessID == 0)
                 {
-                    manager.Initialize(computation, this.slow.ToMonitor.Concat(this.cc.ToMonitor.Concat(this.perfect.ToMonitor)).Distinct());
+                    manager.Initialize(
+                        computation,
+                        this.slow.ToMonitor.Concat(this.cc.ToMonitor.Concat(this.perfect.ToMonitor)).Distinct(),
+                        managerWorkerCount);
                 }
 
                 //computation.OnStageStable += (x, y) => { Console.WriteLine(y.stageId + " " + y.frontier[0]); };

@@ -45,7 +45,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         public bool Equals(SV other)
         {
-            return this.StageId == other.StageId && this.VertexId == other.VertexId;
+            return this.VertexId == other.VertexId && this.StageId == other.StageId;
         }
 
         public override int GetHashCode()
@@ -99,26 +99,28 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
     internal struct DeliveredMessage : IEquatable<DeliveredMessage>
     {
-        public Edge edge;
+        public int srcStage;
+        public SV dst;
         public LexStamp dstTime;
 
         public bool Equals(DeliveredMessage other)
         {
             return
-                edge.Equals(other.edge) && dstTime.Equals(other.dstTime);
+                dst.Equals(other.dst) && srcStage == other.srcStage && dstTime.Equals(other.dstTime);
         }
     }
 
     internal struct DiscardedMessage : IEquatable<DiscardedMessage>
     {
-        public Edge edge;
+        public SV src;
+        public int dstStage;
         public LexStamp srcTime;
         public LexStamp dstTime;
 
         public bool Equals(DiscardedMessage other)
         {
             return
-                edge.Equals(other.edge) && srcTime.Equals(other.srcTime) && dstTime.Equals(other.dstTime);
+                src.Equals(other.src) && dstStage == other.dstStage && srcTime.Equals(other.srcTime) && dstTime.Equals(other.dstTime);
         }
     }
 
@@ -213,11 +215,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // only take the restoration frontiers
                 .Where(f => !f.isNotification)
                 // match with all the discarded messages to the node for a given restoration frontier
-                .Join(discardedMessages, f => f.node.StageId, m => m.edge.dst.StageId, (f, m) => f.PairWith(m))
+                .Join(discardedMessages, f => f.node.StageId, m => m.dstStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
                 .Where(p => !p.First.frontier.Contains(p.Second.dstTime.time))
                 // we only need the sender node id and the send time of the discarded message
-                .Select(p => p.Second.edge.src.PairWith(p.Second.srcTime))
+                .Select(p => p.Second.src.PairWith(p.Second.srcTime))
                 // keep the sender node and minimum send time of any discarded message outside its destination restoration frontier
                 .Min(m => m.First, m => m.Second)
                 // for each node that sent a needed discarded message, match it up with all the available checkpoints,
@@ -244,13 +246,14 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             Collection<Notification, T> deliveredNotificationTimes,
             Collection<Edge, T> graph, FTManager manager) where T : Time<T>
         {
-            Collection<Pair<Edge, FTFrontier>, T> projectedMessageFrontiers = frontiers
+            Collection<Pair<Pair<int, SV>, FTFrontier>, T> projectedMessageFrontiers = frontiers
                 // only look at the restoration frontiers
                 .Where(f => !f.isNotification)
                 // project each frontier along each outgoing edge
                 .Join(
                     graph, f => f.node, e => e.src,
-                    (f, e) => new Edge { src = new SV(e.src.StageId, -1), dst = e.dst }
+                    (f, e) => e.src.StageId
+                        .PairWith(e.dst)
                         .PairWith(f.frontier.Project(manager.Stages[e.src.StageId], e.dst.StageId)));
 
             Collection<Frontier, T> intersectedProjectedNotificationFrontiers = frontiers
@@ -270,8 +273,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // match up delivered messages with the projected frontier along the delivery edge,
                 // keeping the dst node, dst time and projected frontier
                 .Join(
-                    projectedMessageFrontiers, m => m.edge, f => f.First,
-                    (m, f) => f.First.dst.PairWith(m.dstTime.PairWith(f.Second)))
+                    projectedMessageFrontiers, m => m.srcStage.PairWith(m.dst), f => f.First,
+                    (m, f) => f.First.Second.PairWith(m.dstTime.PairWith(f.Second)))
                 // filter to keep only messages that fall outside their projected frontiers
                 .Where(m => !m.Second.Second.Contains(m.Second.First.time))
                 // we only care about the destination node and stale message time
