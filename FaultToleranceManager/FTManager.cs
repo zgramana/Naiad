@@ -51,7 +51,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public FTFrontier currentRestoration;
         public FTFrontier currentNotification;
         public HashSet<FTFrontier> checkpoints;
-        public Dictionary<Pointstamp, int[]> deliveredMessages;
+        public Dictionary<LexStamp, int[]> deliveredMessages;
         public HashSet<Pointstamp> deliveredNotifications;
         /// <summary>
         /// Key is downstream stage ID. For each downstream stage, there is a list of pairs where the first element
@@ -67,7 +67,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             this.currentNotification = new FTFrontier(false);
             this.checkpoints = new HashSet<FTFrontier>();
             this.checkpoints.Add(currentRestoration);
-            this.deliveredMessages = new Dictionary<Pointstamp, int[]>();
+            this.deliveredMessages = new Dictionary<LexStamp, int[]>();
             this.deliveredNotifications = new HashSet<Pointstamp>();
             this.discardedMessages = new Dictionary<int, List<Pair<Pointstamp, List<Pointstamp>>>>();
         }
@@ -399,24 +399,24 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             {
                                 srcDenseStage = this.toDenseStage[srcStage.First],
                                 dst = node,
-                                dstTime = new LexStamp { time = time }
+                                dstTime = new LexStamp(time)
                             }));
 
             if (!update.isTemporary)
             {
                 foreach (var time in messages.GroupBy(m => m.dstTime))
                 {
-                    if (state.currentRestoration.Contains(time.Key.time))
+                    if (state.currentRestoration.Contains(time.Key.Time(node.StageId(this))))
                     {
                         throw new ApplicationException("Stale Delivered message");
                     }
                     var srcs = time.Select(m => m.srcDenseStage).ToArray();
-                    state.deliveredMessages.Add(time.Key.time, srcs);
+                    state.deliveredMessages.Add(time.Key, srcs);
                     if (this.debugLog)
                     {
                         foreach (var src in srcs)
                         {
-                            this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + this.DenseStages[src].StageId + "->" + time.Key.time + " AM");
+                            this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + this.DenseStages[src].StageId + "->" + time.Key + " AM");
                         }
                     }
                 }
@@ -441,7 +441,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
             notificationChanges
                 .AddRange(update.notifications.Select(time =>
-                    new Weighted<Notification>(new Notification { node = node, time = new LexStamp { time = time } }, updateWeight)));
+                    new Weighted<Notification>(new Notification { node = node, time = new LexStamp(time) }, updateWeight)));
 
             foreach (var downstreamStage in update.discardedMessages)
             {
@@ -463,8 +463,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                 {
                                     src = node,
                                     dstDenseStage = denseDownStageId,
-                                    srcTime = new LexStamp { time = upstreamTime.First },
-                                    dstTime = new LexStamp { time = downstreamTime }
+                                    srcTime = new LexStamp(upstreamTime.First),
+                                    dstTime = new LexStamp(downstreamTime)
                                 }, updateWeight));
                             if (!update.isTemporary)
                             {
@@ -572,7 +572,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 .ToArray();
             notificationChanges.AddRange(thisNotifications
                     .Select(n => new Weighted<Notification>(
-                        new Notification { node = node, time = new LexStamp { time = n } }, -1)));
+                        new Notification { node = node, time = new LexStamp(n) }, -1)));
             foreach (var n in thisNotifications)
             {
                 state.deliveredNotifications.Remove(n);
@@ -588,7 +588,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             List<Weighted<DeliveredMessage>> deliveredMessageChanges)
         {
             var thisDeliveredMessages = state.deliveredMessages
-                .Where(m => isLowWatermark == newFrontier.Contains(m.Key))
+                .Where(m => isLowWatermark == newFrontier.Contains(m.Key.Time(node.StageId(this))))
                 .ToArray();
             deliveredMessageChanges.AddRange(thisDeliveredMessages
                     .SelectMany(t => t.Value
@@ -597,7 +597,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             {
                                 srcDenseStage = m,
                                 dst = node,
-                                dstTime = new LexStamp { time = t.Key }
+                                dstTime = t.Key
                             }, -1))));
             foreach (var m in thisDeliveredMessages)
             {
@@ -643,8 +643,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                         {
                                             src = upstream,
                                             dstDenseStage = node.DenseStageId,
-                                            srcTime = new LexStamp { time = upstreamTime },
-                                            dstTime = new LexStamp { time = downstreamTime.First }
+                                            srcTime = new LexStamp(upstreamTime),
+                                            dstTime = new LexStamp(downstreamTime.First)
                                         }, -1)));
                             }
                             else
@@ -678,8 +678,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                     {
                                         src = node,
                                         dstDenseStage = downstreamStage.Key,
-                                        srcTime = new LexStamp { time = upstreamTime },
-                                        dstTime = new LexStamp { time = downstreamTime.First }
+                                        srcTime = new LexStamp(upstreamTime),
+                                        dstTime = new LexStamp(downstreamTime.First)
                                     }, -1));
                             }
                             else
@@ -1212,16 +1212,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     Console.WriteLine();
 
                     Console.Write(" ");
-                    foreach (var time in state.Value.deliveredNotifications.OrderBy(t => new LexStamp { time = t }))
+                    foreach (var time in state.Value.deliveredNotifications.OrderBy(t => new LexStamp(t)))
                     {
                         Console.Write(" " + time.Timestamp);
                     }
                     Console.WriteLine();
 
                     Console.Write(" ");
-                    foreach (var time in state.Value.deliveredMessages.OrderBy(t => new LexStamp { time = t.Key }))
+                    foreach (var time in state.Value.deliveredMessages.OrderBy(t => t.Key))
                     {
-                        Console.Write(" " + time.Key.Timestamp + ":");
+                        Console.Write(" " + time.Key + ":");
                         foreach (var src in time.Value)
                         {
                             Console.Write(" " + src);
@@ -1273,7 +1273,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         {
                             var reducedDiscards = f
                                 .ReduceForDiscarded(
-                                    this.checkpointStream.EnterLoop(c), this.discardedMessages.EnterLoop(c));
+                                    this.checkpointStream.EnterLoop(c), this.discardedMessages.EnterLoop(c), this);
 
                             var reduced = f
                                 .Reduce(

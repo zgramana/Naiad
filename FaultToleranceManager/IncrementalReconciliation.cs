@@ -81,28 +81,103 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
     internal struct LexStamp : IEquatable<LexStamp>, IComparable<LexStamp>
     {
-        public Pointstamp time;
+        private int a, b, c;
+
+        public LexStamp(Pointstamp stamp)
+        {
+            if (stamp.Timestamp.Length == 1)
+            {
+                a = stamp.Timestamp[0];
+                b = -1;
+                c = -1;
+            }
+            else if (stamp.Timestamp.Length == 2)
+            {
+                a = stamp.Timestamp[0];
+                b = stamp.Timestamp[1];
+                c = -1;
+            }
+            else if (stamp.Timestamp.Length == 3)
+            {
+                a = stamp.Timestamp[0];
+                b = stamp.Timestamp[1];
+                c = stamp.Timestamp[2];
+            }
+            else
+            {
+                throw new ApplicationException("Bad stamp length " + stamp);
+            }
+        }
+
+        public Pointstamp Time(int stageId)
+        {
+            if (b < 0)
+            {
+                Pointstamp.FakeArray time = new Pointstamp.FakeArray(1);
+                time.a = a;
+                return new Pointstamp { Location = stageId, Timestamp = time };
+            }
+            else if (c < 0)
+            {
+                Pointstamp.FakeArray time = new Pointstamp.FakeArray(2);
+                time.a = a;
+                time.b = b;
+                return new Pointstamp { Location = stageId, Timestamp = time };
+            }
+            else
+            {
+                Pointstamp.FakeArray time = new Pointstamp.FakeArray(3);
+                time.a = a;
+                time.b = b;
+                time.c = c;
+                return new Pointstamp { Location = stageId, Timestamp = time };
+            }
+        }
 
         public bool Equals(LexStamp other)
         {
-            return this.time.Equals(other.time);
+            return this.a == other.a && this.b == other.b && this.c == other.c;
         }
 
         public int CompareTo(LexStamp other)
         {
-            if (this.time.Equals(other.time))
+            if (this.a < other.a)
             {
-                return 0;
+                return -1;
             }
-            else
+            else if (this.a > other.a)
             {
-                return FTFrontier.IsLessThanOrEqualTo(this.time, other.time) ? -1 : 1;
+                return 1;
             }
+            if (this.b < other.b)
+            {
+                return -1;
+            }
+            else if (this.b > other.b)
+            {
+                return 1;
+            }
+            if (this.c < other.c)
+            {
+                return -1;
+            }
+            else if (this.c > other.c)
+            {
+                return 1;
+            }
+            return 0;
         }
 
         public override int GetHashCode()
         {
-            return time.GetHashCode();
+            return a + b + c;
+        }
+
+        public override string ToString()
+        {
+            if (this.b < 0) return "[" + this.a + "]";
+            if (this.c < 0) return "[" + this.a + "," + this.b + "]";
+            return "[" + this.a + "," + this.b + "," + this.c + "]";
         }
     }
 
@@ -181,14 +256,15 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
     internal static class ExtensionMethods
     {
-        private static Pair<Checkpoint, LexStamp> PairCheckpointToBeLowerThanTime(Checkpoint checkpoint, LexStamp time)
+        private static Pair<Checkpoint, LexStamp> PairCheckpointToBeLowerThanTime(Checkpoint checkpoint, LexStamp time, FTManager manager)
         {
-            if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(time.time))
+            Pointstamp stamp = time.Time(checkpoint.node.StageId(manager));
+            if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(stamp))
             {
                 return new Checkpoint
                 {
                     node = checkpoint.node,
-                    checkpoint = FTFrontier.SetBelow(time.time),
+                    checkpoint = FTFrontier.SetBelow(stamp),
                     downwardClosed = true
                 }.PairWith(time);
             }
@@ -218,7 +294,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public static Collection<Frontier, T> ReduceForDiscarded<T>(
             this Collection<Frontier, T> frontiers,
             Collection<Checkpoint, T> checkpoints,
-            Collection<DiscardedMessage, T> discardedMessages) where T : Time<T>
+            Collection<DiscardedMessage, T> discardedMessages,
+            FTManager manager) where T : Time<T>
         {
             return frontiers
                 // only take the restoration frontiers
@@ -226,7 +303,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // match with all the discarded messages to the node for a given restoration frontier
                 .Join(discardedMessages, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
-                .Where(p => !p.First.frontier.Contains(p.Second.dstTime.time))
+                .Where(p => !p.First.frontier.Contains(p.Second.dstTime.Time(p.First.node.StageId(manager))))
                 // we only need the sender node id and the send time of the discarded message
                 .Select(p => p.Second.src.PairWith(p.Second.srcTime))
                 // keep the sender node and minimum send time of any discarded message outside its destination restoration frontier
@@ -235,9 +312,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // reducing downward-closed checkpoints to be less than the time the message was sent
                 .Join(
                     checkpoints, m => m.First, c => c.node,
-                    (m, c) => PairCheckpointToBeLowerThanTime(c, m.Second))
+                    (m, c) => PairCheckpointToBeLowerThanTime(c, m.Second, manager))
                 // then throw out any checkpoints that included any required but discarded sent messages
-                .Where(c => !c.First.checkpoint.Contains(c.Second.time))
+                .Where(c => !c.First.checkpoint.Contains(c.Second.Time(c.First.node.StageId(manager))))
                 // and just keep the feasible checkpoint
                 .Select(c => c.First)
                 // now select the largest feasible checkpoint at each node constrained by discarded messages
@@ -285,7 +362,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     projectedMessageFrontiers, m => m.srcDenseStage.PairWith(m.dst), f => f.First,
                     (m, f) => f.First.Second.PairWith(m.dstTime.PairWith(f.Second)))
                 // filter to keep only messages that fall outside their projected frontiers
-                .Where(m => !m.Second.Second.Contains(m.Second.First.time))
+                .Where(m => !m.Second.Second.Contains(m.Second.First.Time(m.First.StageId(manager))))
                 // we only care about the destination node and stale message time
                 .Select(m => m.First.PairWith(m.Second.First));
 
@@ -296,7 +373,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     intersectedProjectedNotificationFrontiers, n => n.node, f => f.node,
                     (n, f) => n.node.PairWith(n.time.PairWith(f.frontier)))
                 // filter to keep only notifications that fall outside their projected frontiers
-                .Where(n => !n.Second.Second.Contains(n.Second.First.time))
+                .Where(n => !n.Second.Second.Contains(n.Second.First.Time(n.First.StageId(manager))))
                 // we only care about the node and stale notification time
                 .Select(n => n.First.PairWith(n.Second.First));
 
@@ -310,9 +387,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // reducing downward-closed checkpoints to be less than the time the event happened at
                 .Join(
                     earliestStaleEvents, c => c.node, e => e.First,
-                    (c, e) => PairCheckpointToBeLowerThanTime(c, e.Second))
+                    (c, e) => PairCheckpointToBeLowerThanTime(c, e.Second, manager))
                 // then throw out any checkpoints that included any stale events
-                .Where(c => !c.First.checkpoint.Contains(c.Second.time))
+                .Where(c => !c.First.checkpoint.Contains(c.Second.Time(c.First.node.StageId(manager))))
                 // and select the largest feasible checkpoint at each node
                 .Max(c => c.First.node, c => c.First.checkpoint)
                 // then convert it to a pair of frontiers
