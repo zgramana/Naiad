@@ -34,28 +34,32 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 {
     internal struct SV : IEquatable<SV>
     {
-        public int StageId;
-        public int VertexId;
+        public int denseId;
+        public int DenseStageId { get { return denseId >> 16; } }
+        public int StageId(FTManager manager)
+        {
+            return manager.DenseStages[DenseStageId].StageId;
+        }
+        public int VertexId { get { return denseId & 0xffff; } }
 
         public SV(int Stage, int Vertex)
         {
-            this.StageId = Stage;
-            this.VertexId = Vertex;
+            this.denseId = (Stage << 16) + Vertex;
         }
 
         public bool Equals(SV other)
         {
-            return this.VertexId == other.VertexId && this.StageId == other.StageId;
+            return this.denseId == other.denseId;
         }
 
         public override int GetHashCode()
         {
-            return this.VertexId + (this.StageId << 16);
+            return this.denseId;
         }
 
         public override string ToString()
         {
-            return this.StageId + "." + this.VertexId;
+            return this.DenseStageId + "." + this.VertexId;
         }
     }
 
@@ -66,7 +70,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         public bool Equals(Edge other)
         {
-            return this.src.Equals(other.src) && this.dst.Equals(other.dst);
+            return this.src.denseId == other.src.denseId && this.dst.denseId == other.dst.denseId;
+        }
+
+        public override int GetHashCode()
+        {
+            return src.GetHashCode() + dst.GetHashCode();
         }
     }
 
@@ -99,28 +108,28 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
     internal struct DeliveredMessage : IEquatable<DeliveredMessage>
     {
-        public int srcStage;
+        public int srcDenseStage;
         public SV dst;
         public LexStamp dstTime;
 
         public bool Equals(DeliveredMessage other)
         {
             return
-                dst.Equals(other.dst) && srcStage == other.srcStage && dstTime.Equals(other.dstTime);
+                dst.denseId == other.dst.denseId && srcDenseStage == other.srcDenseStage && dstTime.Equals(other.dstTime);
         }
     }
 
     internal struct DiscardedMessage : IEquatable<DiscardedMessage>
     {
         public SV src;
-        public int dstStage;
+        public int dstDenseStage;
         public LexStamp srcTime;
         public LexStamp dstTime;
 
         public bool Equals(DiscardedMessage other)
         {
             return
-                src.Equals(other.src) && dstStage == other.dstStage && srcTime.Equals(other.srcTime) && dstTime.Equals(other.dstTime);
+                src.denseId == other.src.denseId && dstDenseStage == other.dstDenseStage && srcTime.Equals(other.srcTime) && dstTime.Equals(other.dstTime);
         }
     }
 
@@ -132,7 +141,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public bool Equals(Notification other)
         {
             return
-                node.Equals(other.node) && time.Equals(other.time);
+                node.denseId == other.node.denseId && time.Equals(other.time);
         }
     }
 
@@ -151,7 +160,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         public bool Equals(Frontier other)
         {
-            return this.node.Equals(other.node)
+            return this.node.denseId == other.node.denseId
                 && this.frontier.Equals(other.frontier)
                 && this.isNotification.Equals(other.isNotification);
         }
@@ -166,7 +175,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public bool Equals(Checkpoint other)
         {
             return
-                node.Equals(other.node) && checkpoint.Equals(other.checkpoint) && downwardClosed == other.downwardClosed;
+                node.denseId == other.node.denseId && checkpoint.Equals(other.checkpoint) && downwardClosed == other.downwardClosed;
         }
     }
 
@@ -215,7 +224,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // only take the restoration frontiers
                 .Where(f => !f.isNotification)
                 // match with all the discarded messages to the node for a given restoration frontier
-                .Join(discardedMessages, f => f.node.StageId, m => m.dstStage, (f, m) => f.PairWith(m))
+                .Join(discardedMessages, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
                 .Where(p => !p.First.frontier.Contains(p.Second.dstTime.time))
                 // we only need the sender node id and the send time of the discarded message
@@ -252,9 +261,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // project each frontier along each outgoing edge
                 .Join(
                     graph, f => f.node, e => e.src,
-                    (f, e) => e.src.StageId
+                    (f, e) => e.src.DenseStageId
                         .PairWith(e.dst)
-                        .PairWith(f.frontier.Project(manager.Stages[e.src.StageId], e.dst.StageId)));
+                        .PairWith(f.frontier.Project(manager.DenseStages[e.src.DenseStageId], e.dst.StageId(manager))));
 
             Collection<Frontier, T> intersectedProjectedNotificationFrontiers = frontiers
                 // only look at the notification frontiers
@@ -264,7 +273,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     graph, f => f.node, e => e.src,
                     (f, e) => new Frontier {
                         node = e.dst,
-                        frontier = f.frontier.Project(manager.Stages[e.src.StageId], e.dst.StageId),
+                        frontier = f.frontier.Project(manager.DenseStages[e.src.DenseStageId], e.dst.StageId(manager)),
                         isNotification = true })
                 // and find the intersection (minimum) of the projections at the destination
                 .Min(f => f.node, f => f.frontier);
@@ -273,7 +282,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // match up delivered messages with the projected frontier along the delivery edge,
                 // keeping the dst node, dst time and projected frontier
                 .Join(
-                    projectedMessageFrontiers, m => m.srcStage.PairWith(m.dst), f => f.First,
+                    projectedMessageFrontiers, m => m.srcDenseStage.PairWith(m.dst), f => f.First,
                     (m, f) => f.First.Second.PairWith(m.dstTime.PairWith(f.Second)))
                 // filter to keep only messages that fall outside their projected frontiers
                 .Where(m => !m.Second.Second.Contains(m.Second.First.time))
