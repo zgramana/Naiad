@@ -185,9 +185,9 @@ namespace Microsoft.Research.Naiad
         long TicksSinceStartup { get; }
 
         void PausePeerProcesses(IEnumerable<int> processes);
-        void StartRollback();
+        void StartRollback(Action<string> logAction);
 
-        void RestoreToFrontiers(int graphId, IEnumerable<CheckpointLowWatermark> frontiers);
+        void RestoreToFrontiers(int graphId, IEnumerable<CheckpointLowWatermark> frontiers, Action<string> logAction);
 
         void ResetProgress();
 
@@ -433,7 +433,7 @@ namespace Microsoft.Research.Naiad
 
                 long startTicks = this.stopwatch.ElapsedTicks;
 
-                this.Pause();
+                this.Pause(s => { });
 
                 long pauseTicks = this.stopwatch.ElapsedTicks;
 
@@ -501,18 +501,22 @@ namespace Microsoft.Research.Naiad
             }
         }
 
-        public void StartRollback()
+        public void StartRollback(Action<string> logAction)
         {
-            this.Pause();
+            logAction("preparing to Pause");
+            this.Pause(logAction);
+            logAction("paused");
 
             // forward any fault tolerance updates we received after pausing
             this.FlushFinalFaultToleranceTraffic();
+            logAction("flushed");
 
             // stop sending any clock updates from the centralizer, in preparation for the surgery we will do below
             foreach (BaseComputation computation in this.baseComputations)
             {
                 computation.ProgressTracker.PrepareForRollback(true);
             }
+            logAction("prepared progress");
 
             foreach (BaseComputation computation in this.baseComputations)
             {
@@ -525,18 +529,23 @@ namespace Microsoft.Research.Naiad
                 // out their post-rollback progress items
                 computation.ProgressTracker.PrepareForRollback(false);
             }
+            logAction("reset progress");
 
             Console.WriteLine("Initiator paused in preparation for restoration");
         }
 
-        public void RestoreToFrontiers(int computationIndex, IEnumerable<CheckpointLowWatermark> frontiers)
+        public void RestoreToFrontiers(int computationIndex, IEnumerable<CheckpointLowWatermark> frontiers, Action<string> logAction)
         {
             if (this.networkChannel != null && this.networkChannel is Snapshottable)
             {
                 ((Snapshottable)this.networkChannel).BroadcastCheckpoints(computationIndex, frontiers);
             }
 
+            logAction("broadcast checkpoints");
+
             this.baseComputations[computationIndex].ReceiveCheckpointFrontiersAndRepairProgress(frontiers);
+
+            logAction("received frontiers");
 
             Console.WriteLine("Waiting for progress");
 
@@ -544,24 +553,29 @@ namespace Microsoft.Research.Naiad
             {
                 // wait for peers to send their progress traffic
                 ((Snapshottable)this.networkChannel).WaitForAllRollbackProgressMessages();
+                logAction("got progress traffic");
                 // tell them all the progress traffic has arrived, so they can shut down their
                 // receive thread and restore before we start sending messages again
                 ((Snapshottable)this.networkChannel).SignalProgressRepaired(true);
             }
 
+            logAction("rolling back");
             Console.WriteLine("Rolling back");
 
             this.baseComputations[computationIndex].Rollback();
 
             Console.WriteLine("Resuming");
+            logAction("resuming");
 
             this.ResumeAfterRollback();
 
             Console.WriteLine("Restarting");
+            logAction("restarting");
 
             this.baseComputations[computationIndex].RestartAfterRollback();
 
             Console.WriteLine("Finished rollback");
+            logAction("finished rollback");
         }
 
         public void ResetProgress()
@@ -1191,24 +1205,31 @@ namespace Microsoft.Research.Naiad
             }
         }
 
-        public void Pause()
+        public void Pause(Action<string> logAction)
         {
             Console.WriteLine("Pausing workers");
+            logAction("pausing workers");
             this.Workers.Pause();
+            logAction("paused workers");
             foreach (BaseComputation computation in this.baseComputations)
             {
                 computation.ProgressTracker.ForceFlush();
             }
+            logAction("flushed progress");
 
             if (this.networkChannel != null && this.networkChannel is Snapshottable)
             {
                 Console.WriteLine("Announcing pause");
                 ((Snapshottable)this.networkChannel).AnnounceWorkersPaused();
+                logAction("announced paused");
                 ((Snapshottable)this.networkChannel).AnnounceRollbackBarrier();
+                logAction("announced barrier");
                 ((Snapshottable)this.networkChannel).WaitForAllRollbackBarrierMessages();
+                logAction("waited for barrier");
             }
             // XXXXX
             this.workerGroup.DrainAllQueuedMessages();
+            logAction("drained messages");
         }
 
         public bool HasFailed { get; private set; }

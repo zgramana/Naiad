@@ -226,8 +226,8 @@ function Naiad-ExecuteJob
                 cd c:\temp\$guid\
 
                 echo "C:\temp\$guid\$executableName" $argList
-                & "C:\temp\$guid\$executableName" $argList 2>&1 | %{ "$_".TrimEnd() }
-                #& "C:\temp\$guid\$executableName" $argList 2>&1 | %{ "$_".TrimEnd() } > C:\temp\$guid\output.txt
+                #& "C:\temp\$guid\$executableName" $argList 2>&1 | %{ "$_".TrimEnd() }
+                & "C:\temp\$guid\$executableName" $argList 2>&1 | %{ "$_".TrimEnd() } > C:\temp\$guid\output.txt
             } -AsJob -ComputerName $dnsName -Port $_.frontEndPort -Credential $accountInformation.credential -UseSSL -ArgumentList $bloburi,$guid,$mapping,$_.index,$connectionString,$executableName,$additionalArguments
         }
     }

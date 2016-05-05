@@ -402,7 +402,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             {
                 foreach (var time in messages.GroupBy(m => m.dstTime))
                 {
-                    if (state.currentRestoration.Contains(time.Key.Time(node.StageId(this))))
+                    if (state.currentRestoration.Contains(time.Key.Time(
+                                                            node.StageId(this),
+                                                            this.DenseStages[node.DenseStageId].DefaultVersion.Timestamp.Length)))
                     {
                         throw new ApplicationException("Stale Delivered message");
                     }
@@ -583,7 +585,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             List<Weighted<DeliveredMessage>> deliveredMessageChanges)
         {
             var thisDeliveredMessages = state.deliveredMessages
-                .Where(m => isLowWatermark == newFrontier.Contains(m.Key.Time(node.StageId(this))))
+                .Where(m => isLowWatermark == newFrontier.Contains(m.Key.Time(
+                                                                        node.StageId(this),
+                                                                        this.DenseStages[node.DenseStageId].DefaultVersion.Timestamp.Length)))
                 .ToArray();
             deliveredMessageChanges.AddRange(thisDeliveredMessages
                     .SelectMany(t => t.Value
@@ -1271,7 +1275,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         {
                             var reducedDiscards = f
                                 .ReduceForDiscarded(
-                                    this.checkpointStream.EnterLoop(c), this.discardedMessages.EnterLoop(c));
+                                    this.checkpointStream.EnterLoop(c), this.discardedMessages.EnterLoop(c), this);
 
                             var reduced = f
                                 .Reduce(
@@ -1343,7 +1347,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         private void ComputeRollback()
         {
             this.WriteLog("COMPUTATION START ROLLBACK");
-            this.computation.StartRollback();
+            this.computation.StartRollback(this.WriteLog);
             this.WriteLog("COMPUTATION STARTED ROLLBACK");
 
             // once we get here, everybody should have stopped sending any updates though there may
@@ -1477,6 +1481,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             this.ShowRollback();
 
+            this.WriteLog("SHOWN ROLLBACK");
+
             IEnumerable<CheckpointLowWatermark> frontiers;
             List<CheckpointLowWatermark> gcUpdates;
             Computation computation;
@@ -1490,14 +1496,19 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 this.pendingGCUpdates = null;
             }
 
+            this.WriteLog("SWAPPED ROLLBACK DATA");
+
             if (computation != null)
             {
-                computation.RestoreToFrontiers(frontiers);
+                computation.RestoreToFrontiers(frontiers, this.WriteLog);
+                this.WriteLog("RESTORED COMPUTATION");
                 if (gcUpdates.Count > 0)
                 {
                     computation.ReceiveCheckpointUpdates(gcUpdates);
                 }
             }
+
+            this.WriteLog("FINISHED ROLLBACK TASKS");
         }
 
         /// <summary>

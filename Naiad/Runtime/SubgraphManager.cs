@@ -121,9 +121,9 @@ namespace Microsoft.Research.Naiad
             this.computation.PausePeerProcesses(processors);
         }
 
-        public void StartRollback()
+        public void StartRollback(Action<string> logAction)
         {
-            this.computation.StartRollback();
+            this.computation.StartRollback(logAction);
         }
 
         public void SimulateFailure(int processId, int restartDelay)
@@ -131,9 +131,9 @@ namespace Microsoft.Research.Naiad
             this.computation.SimulateFailure(processId, restartDelay);
         }
 
-        public void RestoreToFrontiers(IEnumerable<CheckpointLowWatermark> frontiers)
+        public void RestoreToFrontiers(IEnumerable<CheckpointLowWatermark> frontiers, Action<string> logAction)
         {
-            this.computation.RestoreToFrontiers(frontiers);
+            this.computation.RestoreToFrontiers(frontiers, logAction);
         }
 
         public void ReceiveCheckpointUpdates(IEnumerable<CheckpointLowWatermark> updates)
@@ -300,13 +300,15 @@ namespace Microsoft.Research.Naiad
         /// <summary>
         /// Tell the computation to initiate roll back, pausing all the workers
         /// </summary>
-        void StartRollback();
+        /// <param name="logAction">action to write a log entry</param>
+        void StartRollback(Action<string> logAction);
 
         /// <summary>
         /// Tell the computation to roll back to the supplied frontiers, then restart
         /// </summary>
         /// <param name="frontiers">the new frontiers</param>
-        void RestoreToFrontiers(IEnumerable<CheckpointLowWatermark> frontiers);
+        /// <param name="logAction">action to write a log entry</param>
+        void RestoreToFrontiers(IEnumerable<CheckpointLowWatermark> frontiers, Action<string> logAction);
 
         /// <summary>
         /// An event that is raised once the graph is started.
@@ -667,14 +669,14 @@ namespace Microsoft.Research.Naiad
             this.controller.PausePeerProcesses(processors);
         }
 
-        public void StartRollback()
+        public void StartRollback(Action<string> logAction)
         {
-            this.controller.StartRollback();
+            this.controller.StartRollback(logAction);
         }
 
-        public void RestoreToFrontiers(IEnumerable<CheckpointLowWatermark> frontiers)
+        public void RestoreToFrontiers(IEnumerable<CheckpointLowWatermark> frontiers, Action<string> logAction)
         {
-            this.controller.RestoreToFrontiers(this.Index, frontiers);
+            this.controller.RestoreToFrontiers(this.Index, frontiers, logAction);
         }
 
         public void ReceiveCheckpointUpdates(IEnumerable<CheckpointLowWatermark> updates)

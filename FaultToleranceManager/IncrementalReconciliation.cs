@@ -81,34 +81,119 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
     internal struct LexStamp : IEquatable<LexStamp>, IComparable<LexStamp>
     {
-        private int a, b, c;
+        private int value;
+        private const int ABITS = 15;
+        private const int AMAX = (1 << ABITS) - 1;
+        private const int BBITS = 8;
+        private const int BMAX = (1 << BBITS) - 1;
+        private const int CBITS = 8;
+        private const int CMAX = (1 << CBITS) - 1;
+        private const int AMASK = AMAX << (BBITS + CBITS);
+        private const int BMASK = BMAX << CBITS;
+        private const int CMASK = CMAX;
+        private int a { get { return value >> (BBITS + CBITS); } }
+        private int b { get { return (value & BMASK) >> CBITS; } }
+        private int c { get { return value & CMASK; } }
+
+        private void IncrementA(int inc)
+        {
+            value += (inc << (BBITS + CBITS));
+        }
+        private void DecrementA(int dec)
+        {
+            value -= (dec << (BBITS + CBITS));
+        }
+        private void SaturateA()
+        {
+            value |= AMASK;
+        }
+        private void ClearA()
+        {
+            value &= (~AMASK);
+        }
+        private void IncrementB(int inc)
+        {
+            value += (inc << CBITS);
+        }
+        private void DecrementB(int dec)
+        {
+            value -= (dec << CBITS);
+        }
+        private void SaturateB()
+        {
+            value |= BMASK;
+        }
+        private void ClearB()
+        {
+            value &= (~BMASK);
+        }
+        private void IncrementC(int inc)
+        {
+            value += inc;
+        }
+        private void DecrementC(int dec)
+        {
+            value -= dec;
+        }
+        private void SaturateC()
+        {
+            value |= CMASK;
+        }
+        private void ClearC()
+        {
+            value &= (~CMASK);
+        }
 
         public LexStamp(LexStamp other)
         {
-            a = other.a;
-            b = other.b;
-            c = other.c;
+            value = other.value;
+        }
+
+        private const int CLIPSLOP = 2;
+
+        private static int Clip(int val, int Max)
+        {
+            if (val >= Max - CLIPSLOP)
+            {
+                int fromTop = Int32.MaxValue - val;
+                if (fromTop > CLIPSLOP)
+                {
+                    throw new ApplicationException("Coordinate out of range " + val + " : " + Max);
+                }
+                return Max - fromTop;
+            }
+            return val;
+        }
+
+        private static int ExpandClip(int val, int Max)
+        {
+            if (val >= Max - CLIPSLOP)
+            {
+                int fromTop = Max - val;
+                return Int32.MaxValue - fromTop;
+            }
+            return val;
         }
 
         public LexStamp(Pointstamp stamp)
         {
             if (stamp.Timestamp.Length == 1)
             {
-                a = stamp.Timestamp[0];
-                b = -1;
-                c = -1;
+                int aVal = Clip(stamp.Timestamp[0], AMAX);
+                value = aVal << (BBITS + CBITS);
             }
             else if (stamp.Timestamp.Length == 2)
             {
-                a = stamp.Timestamp[0];
-                b = stamp.Timestamp[1];
-                c = -1;
+                int aVal = Clip(stamp.Timestamp[0], AMAX);
+                int bVal = Clip(stamp.Timestamp[1], BMAX);
+                value = (aVal << (BBITS + CBITS)) + (bVal << CBITS);
             }
             else if (stamp.Timestamp.Length == 3)
             {
-                a = stamp.Timestamp[0];
-                b = stamp.Timestamp[1];
-                c = stamp.Timestamp[2];
+                int aVal = Clip(stamp.Timestamp[0], AMAX);
+                int bVal = Clip(stamp.Timestamp[1], BMAX);
+                int cVal = Clip(stamp.Timestamp[2], CMAX);
+                value = (aVal << (BBITS + CBITS)) + (bVal << CBITS) + cVal;
             }
             else
             {
@@ -120,199 +205,182 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             if (frontier.Empty)
             {
-                a = -1;
-                b = -1;
-                c = -1;
+                value = -1;
             }
             else if (frontier.Complete)
             {
-                a = Int32.MaxValue;
-                b = Int32.MaxValue;
-                c = Int32.MaxValue;
+                value = Int32.MaxValue;
             }
             else
             {
                 LexStamp stamp = new LexStamp(frontier.maximalElement);
-                a = stamp.a;
-                b = stamp.b;
-                c = stamp.c;
+                value = stamp.value;
             }
         }
 
-        public bool Empty { get { return a < 0; } }
-        public bool Complete { get { return a == Int32.MaxValue && b == Int32.MaxValue && c == Int32.MaxValue; } }
+        public bool Empty { get { return value < 0; } }
+        public bool Complete { get { return value == Int32.MaxValue; } }
 
-        private void IncrementLexicographically()
+        private void IncrementLexicographically(int length)
         {
-            if (b < 0)
+            if (length == 1)
             {
-                // length == 1
                 // maxvalue indicates that all the times in this coordinate are already present in the set
-                if (a != Int32.MaxValue)
+                if (a != AMAX)
                 {
-                    ++a;
+                    IncrementA(1);
                 }
             }
-            else if (c < 0)
+            else if (length == 2)
             {
-                // length == 2
                 // maxvalue indicates that all the times in this coordinate are already present in the set
-                if (b != Int32.MaxValue)
+                if (b != BMAX)
                 {
-                    ++b;
+                    IncrementB(1);
                 }
             }
-            else
+            else // length == 3
             {
-                // length == 3
                 // maxvalue indicates that all the times in this coordinate are already present in the set
-                if (c != Int32.MaxValue)
+                if (c != CMAX)
                 {
-                    ++c;
+                    IncrementC(1);
                 }
             }
         }
 
-        private void DecrementA()
+        private void MaybeDecrementA()
         {
-            if (a > 0)
+            int aVal = a;
+            if (aVal > 0)
             {
-                if (a != Int32.MaxValue)
+                if (aVal != AMAX)
                 {
-                    --a;
+                    DecrementA(1);
                 }
             }
             else
             {
-                a = -1;
-                b = -1;
-                c = -1;
+                value = -1;
             }
         }
 
-        private void DecrementB()
+        private void MaybeDecrementB()
         {
-            if (b > 0)
+            int bVal = b;
+            if (bVal > 0)
             {
-                if (b != Int32.MaxValue)
+                if (bVal != BMAX)
                 {
-                    --b;
+                    DecrementB(1);
                 }
             }
             else
             {
-                b = Int32.MaxValue;
-                DecrementA();
+                SaturateB();
+                MaybeDecrementA();
             }
         }
 
-        private void DecrementC()
+        private void MaybeDecrementC()
         {
-            if (c > 0)
+            int cVal = c;
+            if (cVal > 0)
             {
-                if (c != Int32.MaxValue)
+                if (cVal != CMAX)
                 {
-                    --c;
+                    DecrementC(1);
                 }
             }
             else
             {
-                c = Int32.MaxValue;
-                DecrementB();
+                SaturateC();
+                MaybeDecrementB();
             }
         }
 
-        private void DecrementLexicographically()
+        private void DecrementLexicographically(int length)
         {
-            if (b < 0)
+            if (length == 1)
             {
-                // length == 1
-                DecrementA();
+                MaybeDecrementA();
             }
-            else if (c < 0)
+            else if (length == 2)
             {
-                // length = 2
-                DecrementB();
+                MaybeDecrementB();
             }
-            else
+            else // length == 3
             {
-                // length = 3
-                DecrementC();
+                MaybeDecrementC();
             }
         }
 
-        public static LexStamp SetBelow(LexStamp other)
+        public static LexStamp SetBelow(LexStamp other, int length)
         {
             LexStamp copy = new LexStamp(other);
-            copy.DecrementLexicographically();
+            copy.DecrementLexicographically(length);
             return copy;
         }
 
-        public LexStamp ProjectIteration()
+        public LexStamp ProjectIteration(int length)
         {
             LexStamp copy = new LexStamp(this);
 
             if (!(this.Empty || this.Complete))
             {
-                copy.IncrementLexicographically();
+                copy.IncrementLexicographically(length);
             }
 
             return copy;
         }
 
-        public LexStamp ProjectIngress()
+        public LexStamp ProjectIngress(int length)
         {
             LexStamp copy = new LexStamp(this);
 
             if (!(this.Empty || this.Complete))
             {
-                if (b < 0)
+                if (length == 1)
                 {
-                    // length == 1
-                    copy.b = Int32.MaxValue;
+                    copy.SaturateB();
                 }
-                else if (c < 0)
+                else if (length == 2)
                 {
-                    // length == 2
-                    copy.c = Int32.MaxValue;
+                    copy.SaturateC();
                 }
-                else
+                else // length == 3
                 {
-                    // length == 3
-                    throw new ApplicationException("Ingressing from wrong LexStamp " + this);
+                    throw new ApplicationException("Ingressing from wrong LexStamp " + this + " " + length);
                 }
             }
 
             return copy;
         }
 
-        public LexStamp ProjectEgress()
+        public LexStamp ProjectEgress(int length)
         {
             LexStamp copy = new LexStamp(this);
 
             if (!(this.Empty || this.Complete))
             {
-                if (this.b < 0)
+                if (length == 1)
                 {
-                    // length == 1
                     throw new ApplicationException("Logic bug in projection");
                 }
-                else if (this.c < 0)
+                else if (length == 2)
                 {
-                    // length == 2
-                    copy.b = -1;
-                    if (this.b != Int32.MaxValue)
+                    copy.ClearB();
+                    if (this.b != BMAX)
                     {
-                        copy.DecrementLexicographically();
+                        copy.DecrementLexicographically(1);
                     }
                 }
-                else
+                else // length == 3
                 {
-                    // length = 3
-                    copy.c = -1;
-                    if (this.c != Int32.MaxValue)
+                    copy.ClearC();
+                    if (this.c != CMAX)
                     {
-                        copy.DecrementLexicographically();
+                        copy.DecrementLexicographically(2);
                     }
                 }
             }
@@ -320,19 +388,19 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             return copy;
         }
 
-        public LexStamp Project(Dataflow.Stage stage)
+        public LexStamp Project(Dataflow.Stage stage, int length)
         {
             if (stage.IsIterationAdvance)
             {
-                return this.ProjectIteration();
+                return this.ProjectIteration(length);
             }
             else if (stage.IsIngress)
             {
-                return this.ProjectIngress();
+                return this.ProjectIngress(length);
             }
             else if (stage.IsEgress)
             {
-                return this.ProjectEgress();
+                return this.ProjectEgress(length);
             }
             else
             {
@@ -340,64 +408,48 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
         }
 
-        public Pointstamp Time(int stageId)
+        public Pointstamp Time(int stageId, int length)
         {
-            if (b < 0)
+            if (length == 1)
             {
                 Pointstamp.FakeArray time = new Pointstamp.FakeArray(1);
-                time.a = a;
+                time.a = ExpandClip(a, AMAX);
                 return new Pointstamp { Location = stageId, Timestamp = time };
             }
-            else if (c < 0)
+            else if (length == 2)
             {
                 Pointstamp.FakeArray time = new Pointstamp.FakeArray(2);
-                time.a = a;
-                time.b = b;
+                time.a = ExpandClip(a, AMAX);
+                time.b = ExpandClip(b, BMAX);
                 return new Pointstamp { Location = stageId, Timestamp = time };
             }
-            else
+            else // length == 3
             {
                 Pointstamp.FakeArray time = new Pointstamp.FakeArray(3);
-                time.a = a;
-                time.b = b;
-                time.c = c;
+                time.a = ExpandClip(a, AMAX);
+                time.b = ExpandClip(b, BMAX);
+                time.c = ExpandClip(c, CMAX);
                 return new Pointstamp { Location = stageId, Timestamp = time };
             }
         }
 
         public bool Equals(LexStamp other)
         {
-            return this.a == other.a && this.b == other.b && this.c == other.c;
+            return this.value == other.value;
         }
 
         public bool Contains(LexStamp stamp)
         {
-            return stamp.CompareTo(this) <= 0;
+            return stamp.value <= this.value;
         }
 
         public int CompareTo(LexStamp other)
         {
-            if (this.a < other.a)
+            if (this.value < other.value)
             {
                 return -1;
             }
-            else if (this.a > other.a)
-            {
-                return 1;
-            }
-            if (this.b < other.b)
-            {
-                return -1;
-            }
-            else if (this.b > other.b)
-            {
-                return 1;
-            }
-            if (this.c < other.c)
-            {
-                return -1;
-            }
-            else if (this.c > other.c)
+            else if (this.value > other.value)
             {
                 return 1;
             }
@@ -406,13 +458,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         public override int GetHashCode()
         {
-            return a + 84327 * b + 123412324 * c;
+            return value;
         }
 
         public override string ToString()
         {
-            if (this.b < 0) return "[" + this.a + "]";
-            if (this.c < 0) return "[" + this.a + "," + this.b + "]";
             return "[" + this.a + "," + this.b + "," + this.c + "]";
         }
     }
@@ -502,7 +552,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 return new FTFrontier(true);
             }
             FTFrontier f = new FTFrontier();
-            f.maximalElement = frontier.Time(node.StageId(manager));
+            f.maximalElement = frontier.Time(
+                node.StageId(manager),
+                manager.DenseStages[node.DenseStageId].DefaultVersion.Timestamp.Length);
             return f;
         }
 
@@ -510,7 +562,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             return this.node.denseId == other.node.denseId
                 && this.frontier.Equals(other.frontier)
-                && this.isNotification.Equals(other.isNotification);
+                && this.isNotification == other.isNotification;
         }
 
         public override int GetHashCode()
@@ -553,11 +605,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
     internal static class ExtensionMethods
     {
-        private static Pair<Checkpoint, LexStamp> PairCheckpointToBeLowerThanTime(Checkpoint checkpoint, LexStamp time)
+        private static Pair<Checkpoint, LexStamp> PairCheckpointToBeLowerThanTime(Checkpoint checkpoint, LexStamp time, FTManager manager)
         {
             if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(time))
             {
-                return new Checkpoint(checkpoint.node, LexStamp.SetBelow(time), true).PairWith(time);
+                return new Checkpoint(
+                    checkpoint.node,
+                    LexStamp.SetBelow(
+                        time,
+                        manager.DenseStages[checkpoint.node.DenseStageId].DefaultVersion.Timestamp.Length),
+                    true).PairWith(time);
             }
             else
             {
@@ -580,15 +637,20 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public static Collection<Frontier, T> ReduceForDiscarded<T>(
             this Collection<Frontier, T> frontiers,
             Collection<Checkpoint, T> checkpoints,
-            Collection<DiscardedMessage, T> discardedMessages) where T : Time<T>
+            Collection<DiscardedMessage, T> discardedMessages,
+            FTManager manager) where T : Time<T>
         {
+            // We only need the lowest send time along an edge for each destination time.
+            var prunedDiscarded = discardedMessages
+                .Min(m => m.dstDenseStage.PairWith(m.src).PairWith(m.dstTime), m => m.srcTime);
+
             return frontiers
                 // only take the restoration frontiers
                 .Where(f => !f.isNotification)
                 // only take the lowest frontier at each stage
                 .Min(f => f.node.DenseStageId, f => f.frontier)
                 // match with all the discarded messages to the node for a given restoration frontier
-                .Join(discardedMessages, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
+                .Join(prunedDiscarded, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
                 .Where(p => !p.First.frontier.Contains(p.Second.dstTime))
                 // we only need the sender node id and the send time of the discarded message
@@ -599,7 +661,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // reducing downward-closed checkpoints to be less than the time the message was sent
                 .Join(
                     checkpoints, m => m.First, c => c.node,
-                    (m, c) => PairCheckpointToBeLowerThanTime(c, m.Second))
+                    (m, c) => PairCheckpointToBeLowerThanTime(c, m.Second, manager))
                 // then throw out any checkpoints that included any required but discarded sent messages
                 .Where(c => !c.First.checkpoint.Contains(c.Second))
                 // and just keep the feasible checkpoint
@@ -627,11 +689,15 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     graph, f => f.node, e => e.src,
                     (f, e) => e.src.DenseStageId
                         .PairWith(e.dst)
-                        .PairWith(f.frontier.Project(manager.DenseStages[e.src.DenseStageId])))
+                        .PairWith(f.frontier.Project(
+                            manager.DenseStages[e.src.DenseStageId],
+                            manager.DenseStages[e.src.DenseStageId].DefaultVersion.Timestamp.Length)))
                 // keep only the lowest projected frontier from each src stage
                 .Min(f => f.First, f => f.Second);
 
             Collection<Pair<SV,LexStamp>,T> staleDeliveredMessages = deliveredMessageTimes
+                // make sure messages are unique
+                .Distinct()
                 // match up delivered messages with the projected frontier along the delivery edge,
                 // keeping the dst node, dst time and projected frontier
                 .Join(
@@ -648,7 +714,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // project each frontier along each outgoing edge to its destination
                 .Join(
                     graph, f => f.node, e => e.src,
-                    (f, e) => new Frontier(e.dst, f.frontier.Project(manager.DenseStages[e.src.DenseStageId]), true))
+                    (f, e) => new Frontier(e.dst, f.frontier.Project(
+                                                    manager.DenseStages[e.src.DenseStageId],
+                                                    manager.DenseStages[e.src.DenseStageId].DefaultVersion.Timestamp.Length), true))
                 // and find the intersection (minimum) of the projections at the destination
                 .Min(f => f.node, f => f.frontier);
 
@@ -673,7 +741,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // reducing downward-closed checkpoints to be less than the time the event happened at
                 .Join(
                     earliestStaleEvents, c => c.node, e => e.First,
-                    (c, e) => PairCheckpointToBeLowerThanTime(c, e.Second))
+                    (c, e) => PairCheckpointToBeLowerThanTime(c, e.Second, manager))
                 // then throw out any checkpoints that included any stale events
                 .Where(c => !c.First.checkpoint.Contains(c.Second))
                 // and select the largest feasible checkpoint at each node

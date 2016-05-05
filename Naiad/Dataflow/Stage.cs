@@ -64,7 +64,10 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// the unique identifier associated with the stage
         /// </summary>
         public readonly int StageId;
-        internal abstract Pointstamp DefaultVersion { get; }
+        /// <summary>
+        /// The default time coordinate of the stage
+        /// </summary>
+        public abstract Pointstamp DefaultVersion { get; }
 
         private List<Edge> targets;
         internal List<Edge> Targets { get { return targets; } }
@@ -189,7 +192,10 @@ namespace Microsoft.Research.Naiad.Dataflow
     {
         internal abstract Vertex<TTime> Vertex(int vertexId);
 
-        internal override Pointstamp DefaultVersion
+        /// <summary>
+        /// The default time for the stage.
+        /// </summary>
+        public override Pointstamp DefaultVersion
         {
             get { return default(TTime).ToPointstamp(this.StageId); }
         }
