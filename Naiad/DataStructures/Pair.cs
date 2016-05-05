@@ -66,7 +66,7 @@ namespace Microsoft.Research.Naiad
         /// </summary>
         /// <param name="first">The first element.</param>
         /// <param name="second">The second element.</param>
-        public Pair(TFirst first, TSecond second) { First = first; Second = second; }
+        public  Pair(TFirst first, TSecond second) { First = first; Second = second; }
 
         /// <summary>
         /// Returns a string representation of this pair.

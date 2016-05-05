@@ -201,8 +201,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     SV node = new SV(this.toDenseStage[stage.StageId], vertexId);
                     NodeState state = this.nodeState[node];
 
-                    yield return new Checkpoint {
-                        node = node, checkpoint = state.currentRestoration, downwardClosed = state.downwardClosed };
+                    yield return new Checkpoint(node, state.currentRestoration, state.downwardClosed);
                 }
             }
         }
@@ -360,10 +359,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 checkpointChanges.AddRange(new Weighted<Checkpoint>[]
                     {
-                        new Weighted<Checkpoint>(new Checkpoint {
-                            node = node, checkpoint = update.frontier, downwardClosed = true }, 1),
-                        new Weighted<Checkpoint>(new Checkpoint {
-                            node = node, checkpoint = oldFrontier, downwardClosed = true }, -1)
+                        new Weighted<Checkpoint>(new Checkpoint(node, update.frontier, true), 1),
+                        new Weighted<Checkpoint>(new Checkpoint(node, oldFrontier, true), -1)
                     });
             }
             else
@@ -387,8 +384,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 checkpointChanges.AddRange(new Weighted<Checkpoint>[]
                     {
-                        new Weighted<Checkpoint>(new Checkpoint {
-                            node = node, checkpoint = update.frontier, downwardClosed = false }, updateWeight)
+                        new Weighted<Checkpoint>(new Checkpoint(node, update.frontier, false), updateWeight)
                     });
             }
 
@@ -540,9 +536,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                         checkpointChanges.AddRange(new Weighted<Checkpoint>[] {
                                 new Weighted<Checkpoint>(
-                                    new Checkpoint { node = node, checkpoint = newFrontier, downwardClosed = true }, 1),
+                                    new Checkpoint(node, newFrontier, true), 1),
                                 new Weighted<Checkpoint>(
-                                    new Checkpoint { node = node, checkpoint = thisCheckpoints[0], downwardClosed = true }, -1) });
+                                    new Checkpoint(node, thisCheckpoints[0], true), -1) });
                     }
                 }
             }
@@ -550,8 +546,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             {
                 bool dc = state.downwardClosed;
                 checkpointChanges.AddRange(thisCheckpoints
-                        .Select(c => new Weighted<Checkpoint>(
-                            new Checkpoint { node = node, checkpoint = c, downwardClosed = dc }, -1)));
+                        .Select(c => new Weighted<Checkpoint>(new Checkpoint(node, c, dc), -1)));
                 foreach (var c in thisCheckpoints)
                 {
                     state.checkpoints.Remove(c);
@@ -732,23 +727,25 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 var updates = change.OrderBy(c => c.weight).ToArray();
                 if (change.Key)
                 {
+                    FTFrontier f0 = updates[0].record.ToFrontier(this);
                     if (!((updates.Length == 2 &&
-                           updates[0].weight == -1 && updates[0].record.frontier.Equals(state.currentNotification) &&
+                           updates[0].weight == -1 && f0.Equals(state.currentNotification) &&
                            updates[1].weight == 1) ||
                           (updates.Length == 1 &&
-                           updates[0].weight == 1 && updates[0].record.frontier.Empty && state.currentNotification.Empty)))
+                           updates[0].weight == 1 && f0.Empty && state.currentNotification.Empty)))
                     {
                         throw new ApplicationException("Bad incremental logic");
                     }
-                    state.currentNotification = updates.Last().record.frontier;
+                    state.currentNotification = updates.Last().record.ToFrontier(this);
                 }
                 else
                 {
+                    FTFrontier f0 = updates[0].record.ToFrontier(this);
                     if (!((updates.Length == 2 &&
-                           updates[0].weight == -1 && updates[0].record.frontier.Equals(state.currentRestoration) &&
-                           updates[1].weight == 1 && updates[1].record.frontier.Contains(state.currentRestoration)) ||
+                           updates[0].weight == -1 && f0.Equals(state.currentRestoration) &&
+                           updates[1].weight == 1 && updates[1].record.ToFrontier(this).Contains(state.currentRestoration)) ||
                           (updates.Length == 1 &&
-                           updates[0].weight == 1 && updates[0].record.frontier.Empty && state.currentRestoration.Empty)))
+                           updates[0].weight == 1 && f0.Empty && state.currentRestoration.Empty)))
                     {
                         Console.WriteLine(updates.Length + " updates for " + state.currentRestoration);
                         foreach (var update in updates)
@@ -762,7 +759,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     {
                         this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + state.currentRestoration + "->" + updates.Last().record.frontier);
                     }
-                    state.currentRestoration = updates.Last().record.frontier;
+                    state.currentRestoration = updates.Last().record.ToFrontier(this);
                 }
             }
 
@@ -1009,12 +1006,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 if (change.weight == 1)
                 {
-                    if (change.record.frontier.Equals(current.frontier) || current.frontier.Contains(change.record.frontier))
+                    FTFrontier f = change.record.ToFrontier(this);
+                    if (f.Equals(current.frontier) || current.frontier.Contains(f))
                     {
                         throw new ApplicationException("Rollback below low watermark");
                     }
 
-                    current.frontier = change.record.frontier;
+                    current.frontier = f;
                     this.rollbackFrontiers[change.record.node] = current;
                     if (this.debugLog)
                     {
@@ -1023,7 +1021,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 }
                 else if (change.weight == -1)
                 {
-                    if (!change.record.frontier.Equals(this.nodeState[change.record.node].currentRestoration))
+                    if (!change.record.ToFrontier(this).Equals(this.nodeState[change.record.node].currentRestoration))
                     {
                         throw new ApplicationException("Rollback doesn't match state");
                     }
@@ -1055,11 +1053,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 NodeState current = this.nodeState[change.record.node];
 
-                if (change.record.isNotification && !change.record.frontier.Equals(current.currentNotification))
+                if (change.record.isNotification && !change.record.ToFrontier(this).Equals(current.currentNotification))
                 {
                     throw new ApplicationException("Bad rollback reversion");
                 }
-                if (!change.record.isNotification && !change.record.frontier.Equals(current.currentRestoration))
+                if (!change.record.isNotification && !change.record.ToFrontier(this).Equals(current.currentRestoration))
                 {
                     throw new ApplicationException("Bad rollback reversion");
                 }
@@ -1265,15 +1263,15 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 Collection<Frontier, Epoch> initial = this.checkpointStream
                     .Max(c => c.node, c => c.checkpoint)
                     .SelectMany(c => new Frontier[] {
-                    new Frontier { node = c.node, frontier = c.checkpoint, isNotification = false },
-                    new Frontier { node = c.node, frontier = c.checkpoint, isNotification = true } });
+                    new Frontier(c.node, c.checkpoint, false),
+                    new Frontier(c.node, c.checkpoint, true) });
 
                 var frontiers = initial
                     .FixedPoint((c, f) =>
                         {
                             var reducedDiscards = f
                                 .ReduceForDiscarded(
-                                    this.checkpointStream.EnterLoop(c), this.discardedMessages.EnterLoop(c), this);
+                                    this.checkpointStream.EnterLoop(c), this.discardedMessages.EnterLoop(c));
 
                             var reduced = f
                                 .Reduce(

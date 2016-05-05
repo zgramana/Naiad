@@ -1576,9 +1576,9 @@ namespace FaultToleranceExamples
 #else
 #if true
         static private int slowBase = 0;
-        static private int slowRange = 2;
-        static private int ccBase = 2;
-        static private int ccRange = 1;
+        static private int slowRange = 1;
+        static private int ccBase = 1;
+        static private int ccRange = 2;
         //static private int fbBase = 1;
         //static private int fbRange = 1;
         static private int fpBase = 3;
@@ -1675,11 +1675,17 @@ namespace FaultToleranceExamples
             string logPrefix = "";
             int managerWorkerCount = 1;
             int debugProcess = -1;
+            int failureIntervalSecs = 15;
             int i = 0;
             while (i < args.Length)
             {
                 switch (args[i].ToLower())
                 {
+                    case "-failure":
+                        failureIntervalSecs = Int32.Parse(args[i + 1]);
+                        i += 2;
+                        break;
+
                     case "-debug":
                         debugProcess = Int32.Parse(args[i + 1]);
                         i += 2;
@@ -1709,6 +1715,9 @@ namespace FaultToleranceExamples
                         logPrefix = args[i + 1];
                         i += 2;
                         break;
+
+                    default:
+                        throw new ApplicationException("Unknown argument " + args[i]);
                 }
             }
 
@@ -1739,8 +1748,8 @@ namespace FaultToleranceExamples
             }
             else
             {
-                System.IO.Directory.CreateDirectory("checkpoint");
-                this.config.CheckpointingFactory = s => new FileStreamSequence("checkpoint", s);
+                System.IO.Directory.CreateDirectory(Path.Combine(logPrefix, "checkpoint"));
+                this.config.CheckpointingFactory = s => new FileStreamSequence(Path.Combine(logPrefix, "checkpoint"), s);
             }
 
             this.config.DefaultCheckpointInterval = 1000;
@@ -1827,7 +1836,7 @@ namespace FaultToleranceExamples
                     while (true)
                     {
                         //System.Threading.Thread.Sleep(Timeout.Infinite);
-                        System.Threading.Thread.Sleep(15000);
+                        System.Threading.Thread.Sleep(failureIntervalSecs * 1000);
                         if (this.config.Processes > 2)
                         {
                             manager.FailProcess(1);

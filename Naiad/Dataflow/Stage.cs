@@ -82,9 +82,18 @@ namespace Microsoft.Research.Naiad.Dataflow
         internal enum OperatorType { Unknown, Default, IterationAdvance, Ingress, Egress };
         private readonly OperatorType collectionType;
 
-        internal bool IsIterationAdvance { get { return collectionType == OperatorType.IterationAdvance; } }
-        internal bool IsIngress { get { return collectionType == OperatorType.Ingress; } }
-        internal bool IsEgress { get { return collectionType == OperatorType.Egress; } }
+        /// <summary>
+        /// Is this stage an advance stage in a loop?
+        /// </summary>
+        public bool IsIterationAdvance { get { return collectionType == OperatorType.IterationAdvance; } }
+        /// <summary>
+        /// Is this stage an ingress stage in a loop?
+        /// </summary>
+        public bool IsIngress { get { return collectionType == OperatorType.Ingress; } }
+        /// <summary>
+        /// Is this stage an egress stage in a loop?
+        /// </summary>
+        public bool IsEgress { get { return collectionType == OperatorType.Egress; } }
 
         internal abstract IEnumerable<Vertex> Vertices { get; }
 

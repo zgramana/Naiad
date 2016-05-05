@@ -75,13 +75,20 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         public override int GetHashCode()
         {
-            return src.GetHashCode() + dst.GetHashCode();
+            return src.GetHashCode() + 123412324 * dst.GetHashCode();
         }
     }
 
     internal struct LexStamp : IEquatable<LexStamp>, IComparable<LexStamp>
     {
         private int a, b, c;
+
+        public LexStamp(LexStamp other)
+        {
+            a = other.a;
+            b = other.b;
+            c = other.c;
+        }
 
         public LexStamp(Pointstamp stamp)
         {
@@ -106,6 +113,221 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             else
             {
                 throw new ApplicationException("Bad stamp length " + stamp);
+            }
+        }
+
+        public LexStamp(FTFrontier frontier)
+        {
+            if (frontier.Empty)
+            {
+                a = -1;
+                b = -1;
+                c = -1;
+            }
+            else if (frontier.Complete)
+            {
+                a = Int32.MaxValue;
+                b = Int32.MaxValue;
+                c = Int32.MaxValue;
+            }
+            else
+            {
+                LexStamp stamp = new LexStamp(frontier.maximalElement);
+                a = stamp.a;
+                b = stamp.b;
+                c = stamp.c;
+            }
+        }
+
+        public bool Empty { get { return a < 0; } }
+        public bool Complete { get { return a == Int32.MaxValue && b == Int32.MaxValue && c == Int32.MaxValue; } }
+
+        private void IncrementLexicographically()
+        {
+            if (b < 0)
+            {
+                // length == 1
+                // maxvalue indicates that all the times in this coordinate are already present in the set
+                if (a != Int32.MaxValue)
+                {
+                    ++a;
+                }
+            }
+            else if (c < 0)
+            {
+                // length == 2
+                // maxvalue indicates that all the times in this coordinate are already present in the set
+                if (b != Int32.MaxValue)
+                {
+                    ++b;
+                }
+            }
+            else
+            {
+                // length == 3
+                // maxvalue indicates that all the times in this coordinate are already present in the set
+                if (c != Int32.MaxValue)
+                {
+                    ++c;
+                }
+            }
+        }
+
+        private void DecrementA()
+        {
+            if (a > 0)
+            {
+                --a;
+            }
+            else
+            {
+                a = -1;
+                b = -1;
+                c = -1;
+            }
+        }
+
+        private void DecrementB()
+        {
+            if (b > 0)
+            {
+                --b;
+            }
+            else
+            {
+                b = Int32.MaxValue;
+                DecrementA();
+            }
+        }
+
+        private void DecrementC()
+        {
+            if (c > 0)
+            {
+                --c;
+            }
+            else
+            {
+                c = Int32.MaxValue;
+                DecrementB();
+            }
+        }
+
+        private void DecrementLexicographically()
+        {
+            if (b < 0)
+            {
+                // length == 1
+                DecrementA();
+            }
+            else if (c < 0)
+            {
+                // length = 2
+                DecrementB();
+            }
+            else
+            {
+                // length = 3
+                DecrementC();
+            }
+        }
+
+        public static LexStamp SetBelow(LexStamp other)
+        {
+            LexStamp copy = new LexStamp(other);
+            copy.DecrementLexicographically();
+            return copy;
+        }
+
+        public LexStamp ProjectIteration()
+        {
+            LexStamp copy = new LexStamp(this);
+
+            if (!(this.Empty || this.Complete))
+            {
+                copy.IncrementLexicographically();
+            }
+
+            return copy;
+        }
+
+        public LexStamp ProjectIngress()
+        {
+            LexStamp copy = new LexStamp(this);
+
+            if (!(this.Empty || this.Complete))
+            {
+                if (b < 0)
+                {
+                    // length == 1
+                    copy.b = Int32.MaxValue;
+                }
+                else if (c < 0)
+                {
+                    // length == 2
+                    copy.c = Int32.MaxValue;
+                }
+                else
+                {
+                    // length == 3
+                    throw new ApplicationException("Ingressing from wrong LexStamp " + this);
+                }
+            }
+
+            return copy;
+        }
+
+        public LexStamp ProjectEgress()
+        {
+            LexStamp copy = new LexStamp(this);
+
+            if (!(this.Empty || this.Complete))
+            {
+                if (this.b < 0)
+                {
+                    // length == 1
+                    throw new ApplicationException("Logic bug in projection");
+                }
+                else if (this.c < 0)
+                {
+                    // length == 2
+                    copy.b = -1;
+                    if (this.b != Int32.MaxValue)
+                    {
+                        copy.DecrementLexicographically();
+                    }
+                }
+                else
+                {
+                    // length = 3
+                    copy.c = -1;
+                    if (this.c != Int32.MaxValue)
+                    {
+                        copy.DecrementLexicographically();
+                    }
+                }
+            }
+
+            return copy;
+        }
+
+        public LexStamp Project(Dataflow.Stage stage)
+        {
+            if (stage.IsIterationAdvance)
+            {
+                return this.ProjectIteration();
+            }
+            else if (stage.IsIngress)
+            {
+                return this.ProjectIngress();
+            }
+            else if (stage.IsEgress)
+            {
+                return this.ProjectEgress();
+            }
+            else
+            {
+                return this;
             }
         }
 
@@ -139,6 +361,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             return this.a == other.a && this.b == other.b && this.c == other.c;
         }
 
+        public bool Contains(LexStamp stamp)
+        {
+            return stamp.CompareTo(this) <= 0;
+        }
+
         public int CompareTo(LexStamp other)
         {
             if (this.a < other.a)
@@ -170,7 +397,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
         public override int GetHashCode()
         {
-            return a + b + c;
+            return a + 84327 * b + 123412324 * c;
         }
 
         public override string ToString()
@@ -192,6 +419,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             return
                 dst.denseId == other.dst.denseId && srcDenseStage == other.srcDenseStage && dstTime.Equals(other.dstTime);
         }
+
+        public override int GetHashCode()
+        {
+            return srcDenseStage + 12436432 * dst.GetHashCode() + 981225 * dstTime.GetHashCode();
+        }
     }
 
     internal struct DiscardedMessage : IEquatable<DiscardedMessage>
@@ -206,6 +438,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             return
                 src.denseId == other.src.denseId && dstDenseStage == other.dstDenseStage && srcTime.Equals(other.srcTime) && dstTime.Equals(other.dstTime);
         }
+
+        public override int GetHashCode()
+        {
+            return src.GetHashCode() + 12436432 * dstDenseStage + 94323 * srcTime.GetHashCode() + 981225 * dstTime.GetHashCode();
+        }
     }
 
     internal struct Notification : IEquatable<Notification>
@@ -218,19 +455,46 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             return
                 node.denseId == other.node.denseId && time.Equals(other.time);
         }
+
+        public override int GetHashCode()
+        {
+            return node.denseId + 12436432 * time.GetHashCode();
+        }
     }
 
     internal struct Frontier : IEquatable<Frontier>
     {
         public SV node;
-        public FTFrontier frontier;
+        public LexStamp frontier;
         public bool isNotification;
 
-        public Frontier(SV node, FTFrontier frontier, bool isNotification)
+        public Frontier(SV node, LexStamp frontier, bool isNotification)
         {
             this.node = node;
             this.frontier = frontier;
             this.isNotification = isNotification;
+        }
+
+        public Frontier(SV node, FTFrontier frontier, bool isNotification)
+        {
+            this.node = node;
+            this.frontier = new LexStamp(frontier);
+            this.isNotification = isNotification;
+        }
+
+        public FTFrontier ToFrontier(FTManager manager)
+        {
+            if (frontier.Empty)
+            {
+                return new FTFrontier(false);
+            }
+            if (frontier.Complete)
+            {
+                return new FTFrontier(true);
+            }
+            FTFrontier f = new FTFrontier();
+            f.maximalElement = frontier.Time(node.StageId(manager));
+            return f;
         }
 
         public bool Equals(Frontier other)
@@ -239,32 +503,48 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 && this.frontier.Equals(other.frontier)
                 && this.isNotification.Equals(other.isNotification);
         }
+
+        public override int GetHashCode()
+        {
+            return node.denseId + 12436432 * frontier.GetHashCode() + ((isNotification) ? 643 : 928);
+        }
     }
 
     internal struct Checkpoint : IEquatable<Checkpoint>
     {
         public SV node;
-        public FTFrontier checkpoint;
+        public LexStamp checkpoint;
         public bool downwardClosed;
+
+        public Checkpoint(SV node, FTFrontier checkpoint, bool downwardClosed)
+        {
+            this.node = node;
+            this.checkpoint = new LexStamp(checkpoint);
+            this.downwardClosed = downwardClosed;
+        }
 
         public bool Equals(Checkpoint other)
         {
             return
                 node.denseId == other.node.denseId && checkpoint.Equals(other.checkpoint) && downwardClosed == other.downwardClosed;
         }
+
+        public override int GetHashCode()
+        {
+            return node.denseId + 12436432 * checkpoint.GetHashCode() + ((downwardClosed) ? 643 : 928);
+        }
     }
 
     internal static class ExtensionMethods
     {
-        private static Pair<Checkpoint, LexStamp> PairCheckpointToBeLowerThanTime(Checkpoint checkpoint, LexStamp time, FTManager manager)
+        private static Pair<Checkpoint, LexStamp> PairCheckpointToBeLowerThanTime(Checkpoint checkpoint, LexStamp time)
         {
-            Pointstamp stamp = time.Time(checkpoint.node.StageId(manager));
-            if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(stamp))
+            if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(time))
             {
                 return new Checkpoint
                 {
                     node = checkpoint.node,
-                    checkpoint = FTFrontier.SetBelow(stamp),
+                    checkpoint = LexStamp.SetBelow(time),
                     downwardClosed = true
                 }.PairWith(time);
             }
@@ -274,7 +554,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
         }
 
-        private static Pair<Checkpoint, FTFrontier> PairCheckpointToBeWithinFrontier(Checkpoint checkpoint, FTFrontier frontier)
+        private static Pair<Checkpoint, LexStamp> PairCheckpointToBeWithinFrontier(Checkpoint checkpoint, LexStamp frontier)
         {
             if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(frontier))
             {
@@ -294,8 +574,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public static Collection<Frontier, T> ReduceForDiscarded<T>(
             this Collection<Frontier, T> frontiers,
             Collection<Checkpoint, T> checkpoints,
-            Collection<DiscardedMessage, T> discardedMessages,
-            FTManager manager) where T : Time<T>
+            Collection<DiscardedMessage, T> discardedMessages) where T : Time<T>
         {
             return frontiers
                 // only take the restoration frontiers
@@ -303,7 +582,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // match with all the discarded messages to the node for a given restoration frontier
                 .Join(discardedMessages, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
-                .Where(p => !p.First.frontier.Contains(p.Second.dstTime.Time(p.First.node.StageId(manager))))
+                .Where(p => !p.First.frontier.Contains(p.Second.dstTime))
                 // we only need the sender node id and the send time of the discarded message
                 .Select(p => p.Second.src.PairWith(p.Second.srcTime))
                 // keep the sender node and minimum send time of any discarded message outside its destination restoration frontier
@@ -312,17 +591,17 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // reducing downward-closed checkpoints to be less than the time the message was sent
                 .Join(
                     checkpoints, m => m.First, c => c.node,
-                    (m, c) => PairCheckpointToBeLowerThanTime(c, m.Second, manager))
+                    (m, c) => PairCheckpointToBeLowerThanTime(c, m.Second))
                 // then throw out any checkpoints that included any required but discarded sent messages
-                .Where(c => !c.First.checkpoint.Contains(c.Second.Time(c.First.node.StageId(manager))))
+                .Where(c => !c.First.checkpoint.Contains(c.Second))
                 // and just keep the feasible checkpoint
                 .Select(c => c.First)
                 // now select the largest feasible checkpoint at each node constrained by discarded messages
                 .Max(c => c.node, c => c.checkpoint)
                 // and convert it to a pair of frontiers
                 .SelectMany(c => new Frontier[] {
-                    new Frontier { node = c.node, frontier = c.checkpoint, isNotification = false },
-                    new Frontier { node = c.node, frontier = c.checkpoint, isNotification = true } });
+                    new Frontier(c.node, c.checkpoint, false),
+                    new Frontier(c.node, c.checkpoint, true) });
         }
 
         public static Collection<Frontier, T> Reduce<T>(
@@ -332,7 +611,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             Collection<Notification, T> deliveredNotificationTimes,
             Collection<Edge, T> graph, FTManager manager) where T : Time<T>
         {
-            Collection<Pair<Pair<int, SV>, FTFrontier>, T> projectedMessageFrontiers = frontiers
+            Collection<Pair<Pair<int, SV>, LexStamp>, T> projectedMessageFrontiers = frontiers
                 // only look at the restoration frontiers
                 .Where(f => !f.isNotification)
                 // project each frontier along each outgoing edge
@@ -340,7 +619,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     graph, f => f.node, e => e.src,
                     (f, e) => e.src.DenseStageId
                         .PairWith(e.dst)
-                        .PairWith(f.frontier.Project(manager.DenseStages[e.src.DenseStageId], e.dst.StageId(manager))));
+                        .PairWith(f.frontier.Project(manager.DenseStages[e.src.DenseStageId])));
 
             Collection<Frontier, T> intersectedProjectedNotificationFrontiers = frontiers
                 // only look at the notification frontiers
@@ -348,10 +627,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // project each frontier along each outgoing edge to its destination
                 .Join(
                     graph, f => f.node, e => e.src,
-                    (f, e) => new Frontier {
-                        node = e.dst,
-                        frontier = f.frontier.Project(manager.DenseStages[e.src.DenseStageId], e.dst.StageId(manager)),
-                        isNotification = true })
+                    (f, e) => new Frontier(e.dst, f.frontier.Project(manager.DenseStages[e.src.DenseStageId]), true))
                 // and find the intersection (minimum) of the projections at the destination
                 .Min(f => f.node, f => f.frontier);
 
@@ -362,7 +638,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     projectedMessageFrontiers, m => m.srcDenseStage.PairWith(m.dst), f => f.First,
                     (m, f) => f.First.Second.PairWith(m.dstTime.PairWith(f.Second)))
                 // filter to keep only messages that fall outside their projected frontiers
-                .Where(m => !m.Second.Second.Contains(m.Second.First.Time(m.First.StageId(manager))))
+                .Where(m => !m.Second.Second.Contains(m.Second.First))
                 // we only care about the destination node and stale message time
                 .Select(m => m.First.PairWith(m.Second.First));
 
@@ -373,7 +649,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     intersectedProjectedNotificationFrontiers, n => n.node, f => f.node,
                     (n, f) => n.node.PairWith(n.time.PairWith(f.frontier)))
                 // filter to keep only notifications that fall outside their projected frontiers
-                .Where(n => !n.Second.Second.Contains(n.Second.First.Time(n.First.StageId(manager))))
+                .Where(n => !n.Second.Second.Contains(n.Second.First))
                 // we only care about the node and stale notification time
                 .Select(n => n.First.PairWith(n.Second.First));
 
@@ -387,15 +663,15 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // reducing downward-closed checkpoints to be less than the time the event happened at
                 .Join(
                     earliestStaleEvents, c => c.node, e => e.First,
-                    (c, e) => PairCheckpointToBeLowerThanTime(c, e.Second, manager))
+                    (c, e) => PairCheckpointToBeLowerThanTime(c, e.Second))
                 // then throw out any checkpoints that included any stale events
-                .Where(c => !c.First.checkpoint.Contains(c.Second.Time(c.First.node.StageId(manager))))
+                .Where(c => !c.First.checkpoint.Contains(c.Second))
                 // and select the largest feasible checkpoint at each node
                 .Max(c => c.First.node, c => c.First.checkpoint)
                 // then convert it to a pair of frontiers
                 .SelectMany(c => new Frontier[] {
-                    new Frontier { node = c.First.node, frontier = c.First.checkpoint, isNotification = false },
-                    new Frontier { node = c.First.node, frontier = c.First.checkpoint, isNotification = true } });
+                    new Frontier(c.First.node, c.First.checkpoint, false),
+                    new Frontier(c.First.node, c.First.checkpoint, true) });
 
             // return any reduction in either frontier
             return reducedFrontiers.Concat(intersectedProjectedNotificationFrontiers);

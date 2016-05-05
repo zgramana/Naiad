@@ -545,6 +545,32 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         }
 
         /// <summary>
+        /// Return the hash code of the FTFrontier
+        /// </summary>
+        /// <returns>The hash code</returns>
+        public override int GetHashCode()
+        {
+            if (this.maximalElement.Timestamp.Length == 1)
+            {
+                return this.maximalElement.Location * 7 + this.maximalElement.Timestamp[0] * 123412324;
+            }
+            else if (this.maximalElement.Timestamp.Length == 2)
+            {
+                return this.maximalElement.Location * 7 + this.maximalElement.Timestamp[0] * 123412324 +
+                    this.maximalElement.Timestamp[1] * 89823421;
+            }
+            else if (this.maximalElement.Timestamp.Length == 3)
+            {
+                return this.maximalElement.Location * 7 + this.maximalElement.Timestamp[0] * 123412324 +
+                    this.maximalElement.Timestamp[1] * 89823421 + this.maximalElement.Timestamp[2] * 124057;
+            }
+            else
+            {
+                return this.maximalElement.GetHashCode();
+            }
+        }
+
+        /// <summary>
         /// shows a frontier as a string
         /// </summary>
         /// <returns>string representing the frontier</returns>
