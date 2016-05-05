@@ -177,7 +177,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             if (a > 0)
             {
-                --a;
+                if (a != Int32.MaxValue)
+                {
+                    --a;
+                }
             }
             else
             {
@@ -191,7 +194,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             if (b > 0)
             {
-                --b;
+                if (b != Int32.MaxValue)
+                {
+                    --b;
+                }
             }
             else
             {
@@ -204,7 +210,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             if (c > 0)
             {
-                --c;
+                if (c != Int32.MaxValue)
+                {
+                    --c;
+                }
             }
             else
             {
