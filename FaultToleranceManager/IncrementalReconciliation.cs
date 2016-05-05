@@ -525,6 +525,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public LexStamp checkpoint;
         public bool downwardClosed;
 
+        public Checkpoint(SV node, LexStamp checkpoint, bool downwardClosed)
+        {
+            this.node = node;
+            this.checkpoint = checkpoint;
+            this.downwardClosed = downwardClosed;
+        }
+
         public Checkpoint(SV node, FTFrontier checkpoint, bool downwardClosed)
         {
             this.node = node;
@@ -550,12 +557,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(time))
             {
-                return new Checkpoint
-                {
-                    node = checkpoint.node,
-                    checkpoint = LexStamp.SetBelow(time),
-                    downwardClosed = true
-                }.PairWith(time);
+                return new Checkpoint(checkpoint.node, LexStamp.SetBelow(time), true).PairWith(time);
             }
             else
             {
@@ -567,12 +569,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             if (checkpoint.downwardClosed && checkpoint.checkpoint.Contains(frontier))
             {
-                return new Checkpoint
-                {
-                    node = checkpoint.node,
-                    checkpoint = frontier,
-                    downwardClosed = true
-                }.PairWith(frontier);
+                return new Checkpoint(checkpoint.node, frontier, true).PairWith(frontier);
             }
             else
             {
@@ -588,6 +585,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             return frontiers
                 // only take the restoration frontiers
                 .Where(f => !f.isNotification)
+                // only take the lowest frontier at each stage
+                .Min(f => f.node.DenseStageId, f => f.frontier)
                 // match with all the discarded messages to the node for a given restoration frontier
                 .Join(discardedMessages, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
@@ -628,17 +627,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     graph, f => f.node, e => e.src,
                     (f, e) => e.src.DenseStageId
                         .PairWith(e.dst)
-                        .PairWith(f.frontier.Project(manager.DenseStages[e.src.DenseStageId])));
-
-            Collection<Frontier, T> intersectedProjectedNotificationFrontiers = frontiers
-                // only look at the notification frontiers
-                .Where(f => f.isNotification)
-                // project each frontier along each outgoing edge to its destination
-                .Join(
-                    graph, f => f.node, e => e.src,
-                    (f, e) => new Frontier(e.dst, f.frontier.Project(manager.DenseStages[e.src.DenseStageId]), true))
-                // and find the intersection (minimum) of the projections at the destination
-                .Min(f => f.node, f => f.frontier);
+                        .PairWith(f.frontier.Project(manager.DenseStages[e.src.DenseStageId])))
+                // keep only the lowest projected frontier from each src stage
+                .Min(f => f.First, f => f.Second);
 
             Collection<Pair<SV,LexStamp>,T> staleDeliveredMessages = deliveredMessageTimes
                 // match up delivered messages with the projected frontier along the delivery edge,
@@ -650,6 +641,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 .Where(m => !m.Second.Second.Contains(m.Second.First))
                 // we only care about the destination node and stale message time
                 .Select(m => m.First.PairWith(m.Second.First));
+
+            Collection<Frontier, T> intersectedProjectedNotificationFrontiers = frontiers
+                // only look at the notification frontiers
+                .Where(f => f.isNotification)
+                // project each frontier along each outgoing edge to its destination
+                .Join(
+                    graph, f => f.node, e => e.src,
+                    (f, e) => new Frontier(e.dst, f.frontier.Project(manager.DenseStages[e.src.DenseStageId]), true))
+                // and find the intersection (minimum) of the projections at the destination
+                .Min(f => f.node, f => f.frontier);
 
             Collection<Pair<SV,LexStamp>,T> staleDeliveredNotifications = deliveredNotificationTimes
                 // match up delivered notifications with the intersected projected notification frontier at the node,
