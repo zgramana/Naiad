@@ -1230,6 +1230,9 @@ namespace Microsoft.Research.Naiad
             // wait until the updates have been sent
             this.WaitForQuiescence(maxQueued);
 
+            // make sure no frontier changes get reported between removing the input holds and finishing the restoration
+            this.progressTracker.BlockUpdateFrontiers(true);
+
             // remove the fake holds from the inputs now that progress has been repaired
             inputHolds.Clear();
             foreach (InputStage input in this.inputs)
@@ -1307,6 +1310,9 @@ namespace Microsoft.Research.Naiad
             //this.progressTracker.Aggregator.OnRecv(inputHolds);
 
             //this.progressTracker.ForceFlush();
+
+            // allow frontier changes to be reported again
+            this.progressTracker.BlockUpdateFrontiers(false);
 
             StringWriter w = new StringWriter();
             this.progressTracker.Complain(w);

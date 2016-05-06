@@ -279,6 +279,52 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
 
         public ManualResetEvent FrontierEmpty = new ManualResetEvent(false);
 
+        private void DealWithNewFrontier(Pointstamp[] newFrontier)
+        {
+            // aggregation may need to flush
+            this.Aggregator.ConsiderFlushingBufferedUpdates(false);
+
+            // fire any frontier changed events
+            if (this.OnFrontierChanged != null)
+                this.OnFrontierChanged(this.Stage.Computation, new FrontierChangedEventArgs(newFrontier));
+
+            // no elements means done.
+            if (newFrontier.Length == 0)
+            {
+                //Tracing.Trace("Frontier advanced to <empty>");
+                NaiadTracing.Trace.RefAlignFrontier();
+                this.FrontierEmpty.Set();
+            }
+            else
+            {
+                NaiadTracing.Trace.AdvanceFrontier(newFrontier);
+            }
+
+            // Wake up schedulers to run shutdown actions for the graph.
+            this.Stage.InternalComputation.Controller.Workers.WakeUp();
+        }
+
+        private bool blockedForRestoring = false;
+        public void SetBlockedForRestoring(bool blocked)
+        {
+            // the PCS should not be touched outside this lock, other than by capturing PCS.Frontier.
+            NaiadTracing.Trace.LockAcquire(this.PCS);
+            Monitor.Enter(this.PCS);
+            NaiadTracing.Trace.LockHeld(this.PCS);
+
+            var newFrontier = PCS.Frontier;
+            this.blockedForRestoring = blocked;
+
+            Monitor.Exit(this.PCS);
+            NaiadTracing.Trace.LockRelease(this.PCS);
+
+            if (!blocked)
+            {
+                // we just unblocked so tell people about the current frontier
+                DealWithNewFrontier(newFrontier);
+            }
+        }
+
         public void ProcessCountChange(Pointstamp time, Int64 weight)
         {
             // the PCS should not be touched outside this lock, other than by capturing PCS.Frontier.
@@ -289,33 +335,14 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
             var oldFrontier = PCS.Frontier;
             var frontierChanged = PCS.UpdatePointstampCount(time, weight);
             var newFrontier = PCS.Frontier;
+            var blocked = this.blockedForRestoring;
 
             Monitor.Exit(this.PCS);
             NaiadTracing.Trace.LockRelease(this.PCS);
 
-            if (frontierChanged)
+            if (!blocked && frontierChanged)
             {
-                // aggregation may need to flush
-                this.Aggregator.ConsiderFlushingBufferedUpdates(false);
-
-                // fire any frontier changed events
-                if (this.OnFrontierChanged != null)
-                    this.OnFrontierChanged(this.Stage.Computation, new FrontierChangedEventArgs(newFrontier));
-
-                // no elements means done.
-                if (newFrontier.Length == 0)
-                {
-                    //Tracing.Trace("Frontier advanced to <empty>");
-                    NaiadTracing.Trace.RefAlignFrontier();
-                    this.FrontierEmpty.Set();
-                }
-                else
-                {
-                    NaiadTracing.Trace.AdvanceFrontier(newFrontier);
-                }
-
-                // Wake up schedulers to run shutdown actions for the graph.
-                this.Stage.InternalComputation.Controller.Workers.WakeUp();
+                DealWithNewFrontier(newFrontier);
             }
         }
 
@@ -333,33 +360,14 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
                 frontierChanged = PCS.UpdatePointstampCount(updates.payload[i].Pointstamp, updates.payload[i].Delta) || frontierChanged;
 
             var newFrontier = PCS.Frontier;
+            var blocked = this.blockedForRestoring;
 
             Monitor.Exit(this.PCS);
             NaiadTracing.Trace.LockRelease(this.PCS);
 
-            if (frontierChanged)
+            if (!blocked && frontierChanged)
             {
-                // aggregation may need to flush
-                this.Aggregator.ConsiderFlushingBufferedUpdates(false);
-
-                // fire any frontier changed events
-                if (this.OnFrontierChanged != null)
-                    this.OnFrontierChanged(this.Stage.Computation, new FrontierChangedEventArgs(newFrontier));
-
-                // no elements means done.
-                if (newFrontier.Length == 0)
-                {
-                    //Tracing.Trace("Frontier advanced to <empty>");
-                    NaiadTracing.Trace.RefAlignFrontier();
-                    this.FrontierEmpty.Set();
-                }
-                else
-                {
-                    NaiadTracing.Trace.AdvanceFrontier(newFrontier);
-                }
-
-                // Wake up schedulers to run shutdown actions for the graph.
-                this.Stage.InternalComputation.Controller.Workers.WakeUp();
+                DealWithNewFrontier(newFrontier);
             }
         }
 

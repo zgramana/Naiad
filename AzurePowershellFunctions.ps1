@@ -3,8 +3,8 @@ public class NaiadAccounts
 {
     public System.Management.Automation.PSCredential credential;
 	public System.String resourceGroupName;
-	public System.String storageAccountName;
-	public System.String storageAccountKey;
+	public System.String[] storageAccountNames;
+	public System.String[] storageAccountKeys;
 }
 '@
 
@@ -14,6 +14,7 @@ public class NaiadVM
     public System.String ipAddress;
 	public System.Int32 frontendPort;
 	public System.Int32 index;
+	public System.String connectionString;
 }
 '@
 
@@ -30,9 +31,9 @@ function Naiad-ConfigureAccounts
 
         $result.credential = Get-Credential
         $result.resourceGroupName = $resourceGroupName
-        $storageAccount = Get-AzureRmStorageAccount -ResourceGroupName $resourceGroupName | Sort-Object | Select-Object -First 1
-		$result.storageAccountName = $storageAccount.StorageAccountName
-		$result.storageAccountKey = (Get-AzureRmStorageAccountKey -ResourceGroupName $resourceGroupName -StorageAccountName $storageAccount.StorageAccountName).key1
+        $storageAccounts = Get-AzureRmStorageAccount -ResourceGroupName $resourceGroupName | Sort-Object
+		$result.storageAccountNames = $storageAccounts | %{ $_.StorageAccountName }
+		$result.storageAccountKeys = $storageAccounts | %{ (Get-AzureRmStorageAccountKey -ResourceGroupName $resourceGroupName -StorageAccountName $_.StorageAccountName).key1 }
 
         $result
     }
@@ -46,7 +47,7 @@ function Naiad-PrepareContainer
         [NaiadAccounts]$accountInformation
     )
     PROCESS {
-        $storageContext = New-AzureStorageContext -StorageAccountName $accountInformation.storageAccountName -StorageAccountKey $accountInformation.storageAccountKey
+        $storageContext = New-AzureStorageContext -StorageAccountName $accountInformation.storageAccountNames[0] -StorageAccountKey $accountInformation.storageAccountKeys[0]
         New-AzureStorageContainer -Context $storageContext -Name "executables" -Permission Blob
     }
 }
@@ -70,7 +71,7 @@ function Naiad-PrepareJob
         $compressResult = [System.IO.Compression.ZipFile]::CreateFromDirectory($pathToExecutable, $package)
 
         # push the zipped file to Azure blob store.
-        $storageContext = New-AzureStorageContext -StorageAccountName $accountInformation.storageAccountName -StorageAccountKey $accountInformation.storageAccountKey
+        $storageContext = New-AzureStorageContext -StorageAccountName $accountInformation.storageAccountNames[0] -StorageAccountKey $accountInformation.storageAccountKeys[0]
         $container = Get-AzureStorageContainer -Context $storageContext -Name "executables"
         $blob = Set-AzureStorageBlobContent -Context $storageContext -Container $container.Name -Blob $guid -File $package
 
@@ -95,7 +96,7 @@ function Naiad-DeployJob
         $portRules = (Get-AzureRmLoadBalancer -ResourceGroupName $rg).InboundNatRules | where -Property BackendPort -EQ 5986
 
         # find the zipped file in Azure blob store.
-        $storageContext = New-AzureStorageContext -StorageAccountName $accountInformation.storageAccountName -StorageAccountKey $accountInformation.storageAccountKey
+        $storageContext = New-AzureStorageContext -StorageAccountName $accountInformation.storageAccountNames[0] -StorageAccountKey $accountInformation.storageAccountKeys[0]
         $container = Get-AzureStorageContainer -Context $storageContext -Name "executables"
         $blob = Get-AzureStorageBlob -Context $storageContext -Container $container.Name -Blob $guid
         $bloburi = $blob.ICloudBlob.Uri
@@ -197,12 +198,13 @@ function Naiad-ExecuteJob
 			$vm = New-Object NaiadVM
 			$vm.frontendPort = $rule.FrontendPort
 			$vm.ipAddress = $rulesToIp[$rule.Id]
+			$storageAccount = $i % $accountInformation.storageAccountNames.Length
+	        $vm.connectionString = "DefaultEndpointsProtocol=http;AccountName=" + $accountInformation.storageAccountNames[$storageAccount] + ";AccountKey=" + $accountInformation.storageAccountKeys[$storageAccount] + ";"
 			$vm.index = $i++
 			$vm
 		}
 
         # make the connection string that the executables will need to talk to blob storage
-        $connectionString = "DefaultEndpointsProtocol=http;AccountName=" + $accountInformation.storageAccountName + ";AccountKey=" + $accountInformation.storageAccountKey + ";"
 
         $mapping | ForEach-Object {
             Invoke-Command -ScriptBlock { 
@@ -228,7 +230,7 @@ function Naiad-ExecuteJob
                 echo "C:\temp\$guid\$executableName" $argList
                 #& "C:\temp\$guid\$executableName" $argList 2>&1 | %{ "$_".TrimEnd() }
                 & "C:\temp\$guid\$executableName" $argList 2>&1 | %{ "$_".TrimEnd() } > C:\temp\$guid\output.txt
-            } -AsJob -ComputerName $dnsName -Port $_.frontEndPort -Credential $accountInformation.credential -UseSSL -ArgumentList $bloburi,$guid,$mapping,$_.index,$connectionString,$executableName,$additionalArguments
+            } -AsJob -ComputerName $dnsName -Port $_.frontEndPort -Credential $accountInformation.credential -UseSSL -ArgumentList $bloburi,$guid,$mapping,$_.index,$_.connectionString,$executableName,$additionalArguments
         }
     }
 }

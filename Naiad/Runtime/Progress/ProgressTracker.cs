@@ -48,6 +48,7 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
 
         void ForceFlush();
         void PrepareForRollback(bool preparing);
+        void BlockUpdateFrontiers(bool block);
         void Reset();
 
         void Complain(TextWriter writer);
@@ -90,6 +91,11 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
         }
 
         public void PrepareForRollback(bool preparing)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void BlockUpdateFrontiers(bool block)
         {
             throw new NotImplementedException();
         }
@@ -179,6 +185,11 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
         {
             // this may only be called by the process where the centralizer lives
             this.centralizer.PrepareCentralizerForRollback(preparing);
+        }
+
+        public void BlockUpdateFrontiers(bool block)
+        {
+            this.consumer.SetBlockedForRestoring(block);
         }
 
         public void Reset()
