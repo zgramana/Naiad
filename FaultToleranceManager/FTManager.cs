@@ -44,6 +44,25 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
     {
     }
 
+    internal class DiscardList
+    {
+        /// <summary>
+        /// For a Pair p in messages, if p.second.Count == 0 the entry is discarded, otherwise p.First is a downstream time
+        /// and p.second is a list of upstream times. Some entries of p.second may have -ve location in which case they are
+        /// ignored.
+        /// </summary>
+        public List<Pair<Pointstamp, List<Pointstamp>>> messages;
+        /// <summary>
+        ///  count of discarded entries in messages
+        /// </summary>
+        public int empty;
+
+        public DiscardList()
+        {
+            this.messages = new List<Pair<Pointstamp, List<Pointstamp>>>();
+        }
+    }
+
     internal struct NodeState
     {
         public int gcUpdateSendVertexId;
@@ -57,7 +76,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         /// Key is downstream stage ID. For each downstream stage, there is a list of pairs where the first element
         /// is the downstream time dt, and the second element is a list of upstream times that discarded a message sent to dt.
         /// </summary>
-        public Dictionary<int, List<Pair<Pointstamp, List<Pointstamp>>>> discardedMessages;
+        public Dictionary<int, DiscardList> discardedMessages;
 
         public NodeState(bool downwardClosed, int gcUpdateSendVertexId)
         {
@@ -69,7 +88,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             this.checkpoints.Add(currentRestoration);
             this.deliveredMessages = new Dictionary<LexStamp, int[]>();
             this.deliveredNotifications = new HashSet<Pointstamp>();
-            this.discardedMessages = new Dictionary<int, List<Pair<Pointstamp, List<Pointstamp>>>>();
+            this.discardedMessages = new Dictionary<int, DiscardList>();
         }
     }
 
@@ -149,7 +168,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
         }
 
-        public readonly bool debugLog = false;
+        public enum LogLevel
+        {
+            Verbose,
+            Regular,
+            Minimal
+        }
+        private LogLevel logLevel = LogLevel.Regular;
 
         public void WriteLog(string entry)
         {
@@ -260,7 +285,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 .Select(e => new SV(this.toDenseStage[e.First.First], e.First.Second).PairWith(this.toDenseStage[e.Second.First]))
                 .Distinct())
             {
-                this.nodeState[edgeList.First].discardedMessages.Add(edgeList.Second, new List<Pair<Pointstamp,List<Pointstamp>>>());
+                this.nodeState[edgeList.First].discardedMessages.Add(edgeList.Second, new DiscardList());
             }
 
             this.graph.OnNext(args.edges.Select(e => new Edge
@@ -352,7 +377,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 state.checkpoints.Remove(oldFrontier);
                 state.checkpoints.Add(update.frontier);
-                if (this.debugLog)
+                if (this.logLevel == LogLevel.Verbose)
                 {
                     this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + oldFrontier + "->" + update.frontier + " AC");
                 }
@@ -376,7 +401,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
 
                     state.checkpoints.Add(update.frontier);
-                    if (this.debugLog)
+                    if (this.logLevel == LogLevel.Verbose)
                     {
                         this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + update.frontier + " AC");
                     }
@@ -410,7 +435,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                     var srcs = time.Select(m => m.srcDenseStage).ToArray();
                     state.deliveredMessages.Add(time.Key, srcs);
-                    if (this.debugLog)
+                    if (this.logLevel == LogLevel.Verbose)
                     {
                         foreach (var src in srcs)
                         {
@@ -431,7 +456,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         throw new ApplicationException("Stale Delivered notification");
                     }
                     state.deliveredNotifications.Add(time);
-                    if (this.debugLog)
+                    if (this.logLevel == LogLevel.Verbose)
                     {
                         this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + time.Timestamp + " AN");
                     }
@@ -467,22 +492,41 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             if (!update.isTemporary)
                             {
                                 bool found = false;
-                                for (int i=0; i<stageTimes.Count; ++i)
+                                for (int i=0; i<stageTimes.messages.Count; ++i)
                                 {
-                                    if (stageTimes[i].First.Equals(downstreamTime))
+                                    // if the list is empty that means the entry was pruned
+                                    if (stageTimes.messages[i].Second.Count > 0 &&
+                                        stageTimes.messages[i].First.Equals(downstreamTime))
                                     {
-                                        stageTimes[i].Second.Add(upstreamTime.First);
+                                        stageTimes.messages[i].Second.Add(upstreamTime.First);
                                         found = true;
                                         break;
                                     }
                                 }
                                 if (!found)
                                 {
-                                    List<Pointstamp> newList = new List<Pointstamp>();
-                                    newList.Add(upstreamTime.First);
-                                    stageTimes.Add(downstreamTime.PairWith(newList));
+                                    if (stageTimes.empty > 0)
+                                    {
+                                        // find a pruned entry and re-use it
+                                        for (int i = 0; i < stageTimes.messages.Count; ++i)
+                                        {
+                                            var oldList = stageTimes.messages[i].Second;
+                                            if (oldList.Count == 0)
+                                            {
+                                                oldList.Add(upstreamTime.First);
+                                                stageTimes.messages[i] = downstreamTime.PairWith(oldList);
+                                            }
+                                        }
+                                        --stageTimes.empty;
+                                    }
+                                    else
+                                    {
+                                        List<Pointstamp> newList = new List<Pointstamp>();
+                                        newList.Add(upstreamTime.First);
+                                        stageTimes.messages.Add(downstreamTime.PairWith(newList));
+                                    }
                                 }
-                                if (this.debugLog)
+                                if (this.logLevel == LogLevel.Verbose)
                                 {
                                     this.WriteLog(node + " " + upstreamTime.First + "->" + downstreamStage.First + "." + downstreamTime.Timestamp);
                                 }
@@ -515,7 +559,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     {
                         throw new ApplicationException("No downward-closed checkpoint");
                     }
-                    if (this.debugLog)
+                    if (this.logLevel == LogLevel.Verbose)
                     {
                         this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + state.checkpoints.Single() + "-" + newFrontier + " LWM");
                     }
@@ -531,7 +575,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                         state.checkpoints.Remove(thisCheckpoints[0]);
                         state.checkpoints.Add(newFrontier);
-                        if (this.debugLog)
+                        if (this.logLevel == LogLevel.Verbose)
                         {
                             this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + thisCheckpoints[0] + "->" + newFrontier + " RC");
                         }
@@ -552,7 +596,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 foreach (var c in thisCheckpoints)
                 {
                     state.checkpoints.Remove(c);
-                    if (this.debugLog)
+                    if (this.logLevel == LogLevel.Verbose)
                     {
                         this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + c + " RC");
                     }
@@ -573,7 +617,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             foreach (var n in thisNotifications)
             {
                 state.deliveredNotifications.Remove(n);
-                if (this.debugLog)
+                if (this.logLevel == LogLevel.Verbose)
                 {
                     this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + n.Timestamp + " RN");
                 }
@@ -600,7 +644,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                             }, -1))));
             foreach (var m in thisDeliveredMessages)
             {
-                if (this.debugLog)
+                if (this.logLevel == LogLevel.Verbose)
                 {
                     foreach (var i in state.deliveredMessages[m.Key])
                     {
@@ -630,31 +674,29 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     {
                         NodeState upstreamState = this.nodeState[upstream];
 
-                        List<Pair<Pointstamp, List<Pointstamp>>> pruned = new List<Pair<Pointstamp,List<Pointstamp>>>();
                         var downstreamTimes = upstreamState.discardedMessages[node.DenseStageId];
-                        foreach (var downstreamTime in downstreamTimes)
+                        foreach (var downstreamTime in downstreamTimes.messages)
                         {
-                            if (newStageFrontier.Contains(downstreamTime.First))
+                            if (downstreamTime.Second.Count > 0 &&
+                                newStageFrontier.Contains(downstreamTime.First))
                             {
-                                discardedMessageChanges.AddRange(downstreamTime.Second.Select(
-                                    upstreamTime => new Weighted<DiscardedMessage>(
-                                        new DiscardedMessage
-                                        {
-                                            src = upstream,
-                                            dstDenseStage = node.DenseStageId,
-                                            srcTime = new LexStamp(upstreamTime),
-                                            dstTime = new LexStamp(downstreamTime.First)
-                                        }, -1)));
-                            }
-                            else
-                            {
-                                pruned.Add(downstreamTime);
+                                discardedMessageChanges.AddRange(downstreamTime.Second
+                                    // only remove times that weren't deleted earlier
+                                    .Where(t => t.Location >= 0)
+                                    .Select(
+                                        upstreamTime => new Weighted<DiscardedMessage>(
+                                            new DiscardedMessage
+                                            {
+                                                src = upstream,
+                                                dstDenseStage = node.DenseStageId,
+                                                srcTime = new LexStamp(upstreamTime),
+                                                dstTime = new LexStamp(downstreamTime.First)
+                                            }, -1)));
+                                // mark the entry as pruned
+                                downstreamTime.Second.Clear();
+                                ++downstreamTimes.empty;
                             }
                         }
-
-                        upstreamState.discardedMessages[node.DenseStageId] = pruned;
-
-                        this.nodeState[upstream] = upstreamState;
                     }
                 }
             }
@@ -662,13 +704,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             {
                 foreach (var downstreamStage in state.discardedMessages)
                 {
-                    for (int i = 0; i < downstreamStage.Value.Count; ++i)
+                    foreach (var downstreamTime in downstreamStage.Value.messages)
                     {
-                        var downstreamTime = downstreamStage.Value[i];
-                        List<Pointstamp> pruned = new List<Pointstamp>();
-                        foreach (var upstreamTime in downstreamTime.Second)
+                        for (int i = 0; i < downstreamTime.Second.Count; ++i)
                         {
-                            if (!newFrontier.Contains(upstreamTime))
+                            var upstreamTime = downstreamTime.Second[i];
+                            if (upstreamTime.Location >= 0 &&
+                                !newFrontier.Contains(upstreamTime))
                             {
                                 // If we remove the last downstreamTime don't worry about garbage collecting the upstreamTime since
                                 // it will happen eventually in a low watermark collection.
@@ -680,13 +722,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                         srcTime = new LexStamp(upstreamTime),
                                         dstTime = new LexStamp(downstreamTime.First)
                                     }, -1));
-                            }
-                            else
-                            {
-                                pruned.Add(upstreamTime);
+                                // mark this as deleted
+                                Pointstamp deleted = new Pointstamp();
+                                deleted.Location = -1;
+                                downstreamTime.Second[i] = deleted;
                             }
                         }
-                        downstreamTime.Second = pruned;
                     }
                 }
             }
@@ -759,7 +800,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         this.CheckpointLog.Flush();
                         throw new ApplicationException("Bad incremental logic");
                     }
-                    if (this.debugLog)
+                    if (this.logLevel == LogLevel.Verbose)
                     {
                         this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + state.currentRestoration + "->" + updates.Last().record.frontier);
                     }
@@ -832,7 +873,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             foreach (CheckpointUpdate update in updates)
             {
-                this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + (update.isTemporary ? "TA" : "UA"));
+                if (this.logLevel != LogLevel.Minimal)
+                {
+                    this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + (update.isTemporary ? "TA" : "UA"));
+                }
                 this.AddChangesFromUpdate(update, 1,
                     checkpointChanges, notificationChanges, deliveredMessageChanges, discardedMessageChanges);
                 didAnything = true;
@@ -841,7 +885,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             if (changes != null)
             {
                 this.WriteLog("ADDING CHANGES");
-                if (this.debugLog)
+                if (this.logLevel == LogLevel.Verbose)
                 {
                     foreach (IGrouping<SV, Weighted<Frontier>> u in changes.GroupBy(c => c.record.node).OrderBy(s => s.Key.denseId))
                     {
@@ -883,9 +927,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                 if (gcUpdates.Count > 0 && this.computation != null && sendGCUpdates)
                 {
-                    foreach (var update in gcUpdates)
+                    if (this.logLevel != LogLevel.Minimal)
                     {
-                        this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + "G" + update.dstStageId + "." + update.dstVertexId);
+                        foreach (var update in gcUpdates)
+                        {
+                            this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + "G" + update.dstStageId + "." + update.dstVertexId);
+                        }
                     }
                     this.computation.ReceiveCheckpointUpdates(gcUpdates);
                 }
@@ -938,7 +985,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             CheckpointUpdate update = args.checkpoint;
 
-            this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + (update.isTemporary ? "T" : "U"));
+            if (this.logLevel != LogLevel.Minimal)
+            {
+                this.WriteLog(update.stageId + "." + update.vertexId + " " + update.frontier + " " + (update.isTemporary ? "T" : "U"));
+            }
 
             lock (this)
             {
@@ -987,7 +1037,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             // fill in the low watermark for everyone first
             foreach (var state in this.nodeState)
             {
-                if (this.debugLog)
+                if (this.logLevel == LogLevel.Verbose)
                 {
                     this.WriteLog(state.Key.StageId(this) + "." + state.Key.VertexId + " " + state.Value.currentRestoration + " LW");
                 }
@@ -1018,7 +1068,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
                     current.frontier = f;
                     this.rollbackFrontiers[change.record.node] = current;
-                    if (this.debugLog)
+                    if (this.logLevel == LogLevel.Verbose)
                     {
                         this.WriteLog(change.record.node.StageId(this) + "." + change.record.node.VertexId + " " + current.frontier + " RB");
                     }
@@ -1236,7 +1286,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     foreach (var stage in state.Value.discardedMessages.OrderBy(t => t.Key))
                     {
                         Console.Write(" " + stage.Key + ":");
-                        foreach (var dst in stage.Value)
+                        foreach (var dst in stage.Value.messages)
                         {
                             foreach (var src in dst.Second)
                             {
@@ -1265,7 +1315,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 this.discardedMessages = reconciliation.NewInputCollection<DiscardedMessage>();
 
                 Collection<Frontier, Epoch> initial = this.checkpointStream
-                    .Max(c => c.node, c => c.checkpoint)
+                    .Max(c => c.node.denseId, c => c.checkpoint.value)
                     .SelectMany(c => new Frontier[] {
                     new Frontier(c.node, c.checkpoint, false),
                     new Frontier(c.node, c.checkpoint, true) });
@@ -1284,7 +1334,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                     this);
 
                             return reduced.Concat(reducedDiscards).Concat(f)
-                                .Min(ff => ff.node.PairWith(ff.isNotification), ff => ff.frontier);
+                                .Min(ff => (ff.node.denseId + (ff.isNotification ? 0x10000 : 0)), ff => ff.frontier.value);
                         })
                     .Consolidate();
 
@@ -1479,7 +1529,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             this.ComputeRollback();
 
-            this.ShowRollback();
+            if (this.logLevel != LogLevel.Minimal)
+            {
+                this.ShowRollback();
+            }
 
             this.WriteLog("SHOWN ROLLBACK");
 
@@ -1515,10 +1568,14 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         /// Start monitoring the checkpoints for Naiad computation <paramref name="computation"/>
         /// </summary>
         /// <param name="computation">the computation to be managed</param>
-        public void Initialize(Computation computation, IEnumerable<int> stagesToMonitor, int workerCount)
+        public void Initialize(Computation computation, IEnumerable<int> stagesToMonitor, int workerCount, bool minimalLogging)
         {
             this.computation = computation;
             this.stopwatch = computation.Controller.Stopwatch;
+            if (minimalLogging)
+            {
+                this.logLevel = LogLevel.Minimal;
+            }
 
             foreach (int stage in stagesToMonitor)
             {

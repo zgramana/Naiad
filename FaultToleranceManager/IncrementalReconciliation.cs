@@ -32,25 +32,25 @@ using Microsoft.Research.Naiad.Dataflow.StandardVertices;
 
 namespace Microsoft.Research.Naiad.FaultToleranceManager
 {
-    internal struct SV : IEquatable<SV>
+    internal struct SV
     {
         public int denseId;
-        public int DenseStageId { get { return denseId >> 16; } }
+        public int DenseStageId { get { return denseId >> 8; } }
         public int StageId(FTManager manager)
         {
             return manager.DenseStages[DenseStageId].StageId;
         }
-        public int VertexId { get { return denseId & 0xffff; } }
+        public int VertexId { get { return denseId & 0xff; } }
 
         public SV(int Stage, int Vertex)
         {
-            this.denseId = (Stage << 16) + Vertex;
+            this.denseId = (Stage << 8) + Vertex;
         }
 
-        public bool Equals(SV other)
-        {
-            return this.denseId == other.denseId;
-        }
+        //public bool Equals(SV other)
+        //{
+        //    return this.denseId == other.denseId;
+        //}
 
         public override int GetHashCode()
         {
@@ -79,9 +79,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         }
     }
 
-    internal struct LexStamp : IEquatable<LexStamp>, IComparable<LexStamp>
+    internal struct LexStamp// : IEquatable<LexStamp>, IComparable<LexStamp>
     {
-        private int value;
+        public int value;
         private const int ABITS = 15;
         private const int AMAX = (1 << ABITS) - 1;
         private const int BBITS = 8;
@@ -433,32 +433,32 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
         }
 
-        public bool Equals(LexStamp other)
-        {
-            return this.value == other.value;
-        }
+        //public bool Equals(LexStamp other)
+        //{
+        //    return this.value == other.value;
+        //}
 
         public bool Contains(LexStamp stamp)
         {
             return stamp.value <= this.value;
         }
 
-        public int CompareTo(LexStamp other)
-        {
-            if (this.value < other.value)
-            {
-                return -1;
-            }
-            else if (this.value > other.value)
-            {
-                return 1;
-            }
-            return 0;
-        }
+        //public int CompareTo(LexStamp other)
+        //{
+        //    if (this.value < other.value)
+        //    {
+        //        return -1;
+        //    }
+        //    else if (this.value > other.value)
+        //    {
+        //        return 1;
+        //    }
+        //    return 0;
+        //}
 
         public override int GetHashCode()
         {
-            return value;
+            return a + b + c;
         }
 
         public override string ToString()
@@ -476,7 +476,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public bool Equals(DeliveredMessage other)
         {
             return
-                dst.denseId == other.dst.denseId && srcDenseStage == other.srcDenseStage && dstTime.Equals(other.dstTime);
+                dst.denseId == other.dst.denseId && srcDenseStage == other.srcDenseStage && dstTime.value == other.dstTime.value;
         }
 
         public override int GetHashCode()
@@ -495,12 +495,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public bool Equals(DiscardedMessage other)
         {
             return
-                src.denseId == other.src.denseId && dstDenseStage == other.dstDenseStage && srcTime.Equals(other.srcTime) && dstTime.Equals(other.dstTime);
+                src.denseId == other.src.denseId && dstDenseStage == other.dstDenseStage &&
+                srcTime.value == other.srcTime.value && dstTime.value == other.dstTime.value;
         }
 
         public override int GetHashCode()
         {
-            return src.GetHashCode() + 12436432 * dstDenseStage + 94323 * srcTime.GetHashCode() + 981225 * dstTime.GetHashCode();
+            return src.denseId + dstDenseStage + srcTime.GetHashCode() + dstTime.GetHashCode();
         }
     }
 
@@ -512,7 +513,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public bool Equals(Notification other)
         {
             return
-                node.denseId == other.node.denseId && time.Equals(other.time);
+                node.denseId == other.node.denseId && time.value == other.time.value;
         }
 
         public override int GetHashCode()
@@ -561,13 +562,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public bool Equals(Frontier other)
         {
             return this.node.denseId == other.node.denseId
-                && this.frontier.Equals(other.frontier)
+                && this.frontier.value == other.frontier.value
                 && this.isNotification == other.isNotification;
         }
 
         public override int GetHashCode()
         {
-            return node.denseId + 12436432 * frontier.GetHashCode() + ((isNotification) ? 643 : 928);
+            return node.denseId + frontier.GetHashCode() + ((isNotification) ? 1: 0);
         }
     }
 
@@ -594,7 +595,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         public bool Equals(Checkpoint other)
         {
             return
-                node.denseId == other.node.denseId && checkpoint.Equals(other.checkpoint) && downwardClosed == other.downwardClosed;
+                node.denseId == other.node.denseId && checkpoint.value == other.checkpoint.value && downwardClosed == other.downwardClosed;
         }
 
         public override int GetHashCode()
@@ -634,6 +635,16 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             }
         }
 
+        private static UInt64 PruneKey(DiscardedMessage m)
+        {
+            return
+                (((UInt64)m.dstDenseStage) << 48) +
+                (((UInt64)m.src.denseId) << 32) +
+                ((m.dstTime.value < 0) ?
+                    (UInt64)0xffffffff :
+                    (UInt64)m.dstTime.value);
+        }
+
         public static Collection<Frontier, T> ReduceForDiscarded<T>(
             this Collection<Frontier, T> frontiers,
             Collection<Checkpoint, T> checkpoints,
@@ -642,13 +653,13 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         {
             // We only need the lowest send time along an edge for each destination time.
             var prunedDiscarded = discardedMessages
-                .Min(m => m.dstDenseStage.PairWith(m.src).PairWith(m.dstTime), m => m.srcTime);
+                .Min(m => PruneKey(m), m => m.srcTime.value);
 
             return frontiers
                 // only take the restoration frontiers
                 .Where(f => !f.isNotification)
                 // only take the lowest frontier at each stage
-                .Min(f => f.node.DenseStageId, f => f.frontier)
+                .Min(f => f.node.DenseStageId, f => f.frontier.value)
                 // match with all the discarded messages to the node for a given restoration frontier
                 .Join(prunedDiscarded, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
@@ -656,22 +667,37 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // we only need the sender node id and the send time of the discarded message
                 .Select(p => p.Second.src.PairWith(p.Second.srcTime))
                 // keep the sender node and minimum send time of any discarded message outside its destination restoration frontier
-                .Min(m => m.First, m => m.Second)
+                .Min(m => m.First.denseId, m => m.Second.value)
                 // for each node that sent a needed discarded message, match it up with all the available checkpoints,
                 // reducing downward-closed checkpoints to be less than the time the message was sent
                 .Join(
-                    checkpoints, m => m.First, c => c.node,
+                    checkpoints, m => m.First.denseId, c => c.node.denseId,
                     (m, c) => PairCheckpointToBeLowerThanTime(c, m.Second, manager))
                 // then throw out any checkpoints that included any required but discarded sent messages
                 .Where(c => !c.First.checkpoint.Contains(c.Second))
                 // and just keep the feasible checkpoint
                 .Select(c => c.First)
                 // now select the largest feasible checkpoint at each node constrained by discarded messages
-                .Max(c => c.node, c => c.checkpoint)
+                .Max(c => c.node.denseId, c => c.checkpoint.value)
                 // and convert it to a pair of frontiers
                 .SelectMany(c => new Frontier[] {
                     new Frontier(c.node, c.checkpoint, false),
                     new Frontier(c.node, c.checkpoint, true) });
+        }
+
+        private static UInt64 StageFrontierKey(Pair<Pair<int, SV>, LexStamp> sf)
+        {
+            return
+                (((UInt64)sf.First.First) << 48) +
+                (((UInt64)sf.First.Second.denseId) << 32) +
+                ((sf.Second.value < 0) ?
+                    (UInt64)0xffffffff :
+                    (UInt64)sf.Second.value);
+        }
+
+        private static int EdgeKey(Pair<int, SV> edge)
+        {
+            return (edge.First << 16) + edge.Second.denseId;
         }
 
         public static Collection<Frontier, T> Reduce<T>(
@@ -686,14 +712,14 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 .Where(f => !f.isNotification)
                 // project each frontier along each outgoing edge
                 .Join(
-                    graph, f => f.node, e => e.src,
+                    graph, f => f.node.denseId, e => e.src.denseId,
                     (f, e) => e.src.DenseStageId
                         .PairWith(e.dst)
                         .PairWith(f.frontier.Project(
                             manager.DenseStages[e.src.DenseStageId],
                             manager.DenseStages[e.src.DenseStageId].DefaultVersion.Timestamp.Length)))
                 // keep only the lowest projected frontier from each src stage
-                .Min(f => f.First, f => f.Second);
+                .Min(f => StageFrontierKey(f), f => f.Second.value);
 
             Collection<Pair<SV,LexStamp>,T> staleDeliveredMessages = deliveredMessageTimes
                 // make sure messages are unique
@@ -701,7 +727,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // match up delivered messages with the projected frontier along the delivery edge,
                 // keeping the dst node, dst time and projected frontier
                 .Join(
-                    projectedMessageFrontiers, m => m.srcDenseStage.PairWith(m.dst), f => f.First,
+                    projectedMessageFrontiers, m => EdgeKey(m.srcDenseStage.PairWith(m.dst)), f => EdgeKey(f.First),
                     (m, f) => f.First.Second.PairWith(m.dstTime.PairWith(f.Second)))
                 // filter to keep only messages that fall outside their projected frontiers
                 .Where(m => !m.Second.Second.Contains(m.Second.First))
@@ -713,18 +739,18 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 .Where(f => f.isNotification)
                 // project each frontier along each outgoing edge to its destination
                 .Join(
-                    graph, f => f.node, e => e.src,
+                    graph, f => f.node.denseId, e => e.src.denseId,
                     (f, e) => new Frontier(e.dst, f.frontier.Project(
                                                     manager.DenseStages[e.src.DenseStageId],
                                                     manager.DenseStages[e.src.DenseStageId].DefaultVersion.Timestamp.Length), true))
                 // and find the intersection (minimum) of the projections at the destination
-                .Min(f => f.node, f => f.frontier);
+                .Min(f => f.node.denseId, f => f.frontier.value);
 
             Collection<Pair<SV,LexStamp>,T> staleDeliveredNotifications = deliveredNotificationTimes
                 // match up delivered notifications with the intersected projected notification frontier at the node,
                 // keeping node, time and intersected projected frontier
                 .Join(
-                    intersectedProjectedNotificationFrontiers, n => n.node, f => f.node,
+                    intersectedProjectedNotificationFrontiers, n => n.node.denseId, f => f.node.denseId,
                     (n, f) => n.node.PairWith(n.time.PairWith(f.frontier)))
                 // filter to keep only notifications that fall outside their projected frontiers
                 .Where(n => !n.Second.Second.Contains(n.Second.First))
@@ -734,18 +760,18 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             Collection<Pair<SV,LexStamp>,T> earliestStaleEvents = staleDeliveredMessages
                 .Concat(staleDeliveredNotifications)
                 // keep only the earliest stale event at each node
-                .Min(n => n.First, n => n.Second);
+                .Min(n => n.First.denseId, n => n.Second.value);
 
             var reducedFrontiers = checkpoints
                 // for each node that executed a stale, match it up with all the available checkpoints,
                 // reducing downward-closed checkpoints to be less than the time the event happened at
                 .Join(
-                    earliestStaleEvents, c => c.node, e => e.First,
+                    earliestStaleEvents, c => c.node.denseId, e => e.First.denseId,
                     (c, e) => PairCheckpointToBeLowerThanTime(c, e.Second, manager))
                 // then throw out any checkpoints that included any stale events
                 .Where(c => !c.First.checkpoint.Contains(c.Second))
                 // and select the largest feasible checkpoint at each node
-                .Max(c => c.First.node, c => c.First.checkpoint)
+                .Max(c => c.First.node.denseId, c => c.First.checkpoint.value)
                 // then convert it to a pair of frontiers
                 .SelectMany(c => new Frontier[] {
                     new Frontier(c.First.node, c.First.checkpoint, false),

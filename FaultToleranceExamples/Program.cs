@@ -1674,6 +1674,7 @@ namespace FaultToleranceExamples
             bool useAzure = false;
             string logPrefix = "";
             int managerWorkerCount = 1;
+            bool minimalLogging = false;
             int debugProcess = -1;
             int failureIntervalSecs = 15;
             int i = 0;
@@ -1681,6 +1682,11 @@ namespace FaultToleranceExamples
             {
                 switch (args[i].ToLower())
                 {
+                    case "-minimallog":
+                        minimalLogging = true;
+                        ++i;
+                        break;
+
                     case "-failure":
                         failureIntervalSecs = Int32.Parse(args[i + 1]);
                         i += 2;
@@ -1792,7 +1798,7 @@ namespace FaultToleranceExamples
                     manager.Initialize(
                         computation,
                         this.slow.ToMonitor.Concat(this.cc.ToMonitor.Concat(this.perfect.ToMonitor)).Distinct(),
-                        managerWorkerCount);
+                        managerWorkerCount, minimalLogging);
                 }
 
                 //computation.OnStageStable += (x, y) => { Console.WriteLine(y.stageId + " " + y.frontier[0]); };
