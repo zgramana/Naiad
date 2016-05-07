@@ -1230,20 +1230,17 @@ namespace Microsoft.Research.Naiad
             // wait until the updates have been sent
             this.WaitForQuiescence(maxQueued);
 
-            // make sure no frontier changes get reported between removing the input holds and finishing the restoration
-            this.progressTracker.BlockUpdateFrontiers(true);
-
-            // remove the fake holds from the inputs now that progress has been repaired
-            inputHolds.Clear();
-            foreach (InputStage input in this.inputs)
-            {
-                int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
-                foreach (var time in input.InitialTimes)
-                {
-                    inputHolds.Add(time, -numberOfLocalInputs);
-                }
-            }
-            this.progressTracker.Aggregator.OnRecv(inputHolds);
+            //// remove the fake holds from the inputs now that progress has been repaired
+            //inputHolds.Clear();
+            //foreach (InputStage input in this.inputs)
+            //{
+            //    int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
+            //    foreach (var time in input.InitialTimes)
+            //    {
+            //        inputHolds.Add(time, -numberOfLocalInputs);
+            //    }
+            //}
+            //this.progressTracker.Aggregator.OnRecv(inputHolds);
 
             this.progressTracker.ForceFlush();
 
@@ -1297,26 +1294,23 @@ namespace Microsoft.Research.Naiad
                 scheduler.StopRestoring();
             }
 
-            //Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp, long>();
-            //// remove the fake holds from the inputs now that progress has been repaired
-            //foreach (InputStage input in this.inputs)
-            //{
-            //    int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
-            //    foreach (var time in input.InitialTimes)
-            //    {
-            //        inputHolds.Add(time, -numberOfLocalInputs);
-            //    }
-            //}
-            //this.progressTracker.Aggregator.OnRecv(inputHolds);
+            Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp, long>();
+            // remove the fake holds from the inputs now that progress has been repaired
+            foreach (InputStage input in this.inputs)
+            {
+                int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
+                foreach (var time in input.InitialTimes)
+                {
+                    inputHolds.Add(time, -numberOfLocalInputs);
+                }
+            }
+            this.progressTracker.Aggregator.OnRecv(inputHolds);
 
-            //this.progressTracker.ForceFlush();
+            this.progressTracker.ForceFlush();
 
-            // allow frontier changes to be reported again
-            this.progressTracker.BlockUpdateFrontiers(false);
-
-            StringWriter w = new StringWriter();
-            this.progressTracker.Complain(w);
-            Console.WriteLine(w);
+            //StringWriter w = new StringWriter();
+            //this.progressTracker.Complain(w);
+            //Console.WriteLine(w);
 
             // it's ok to add new inputs again
             foreach (InputStage input in this.inputs)

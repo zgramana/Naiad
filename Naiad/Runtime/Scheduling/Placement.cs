@@ -282,9 +282,9 @@ namespace Microsoft.Research.Naiad.Dataflow
             private static IEnumerable<VertexLocation> MakeRange(IEnumerable<int> processes, IEnumerable<int> threads)
             {
                 int numberOfThreads = threads.Count();
-                return processes.SelectMany((thisProcess, index) =>
-                    threads.Select(thisThread =>
-                        new VertexLocation(numberOfThreads * index + thisThread, thisProcess, thisThread)));
+                return processes.SelectMany((thisProcess, processIndex) =>
+                    threads.Select((thisThread, threadIndex) =>
+                        new VertexLocation(numberOfThreads * processIndex + threadIndex, thisProcess, thisThread)));
             }
 
             /// <summary>

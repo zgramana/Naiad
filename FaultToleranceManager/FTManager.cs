@@ -162,7 +162,6 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 if (checkpointLog == null)
                 {
                     this.checkpointLog = logStreamFactory("ftmanager.log");
-                    stopwatch.Start();
                 }
                 return checkpointLog;
             }
@@ -181,7 +180,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             lock (this)
             {
                 long microseconds = this.stopwatch.ElapsedTicks * 1000000L / System.Diagnostics.Stopwatch.Frequency;
-                this.CheckpointLog.Log.WriteLine(String.Format("{0:D11}: {1}", microseconds, entry));
+                var log = this.CheckpointLog.Log;
+                lock (log)
+                {
+                    log.WriteLine(String.Format("{0:D11}: {1}", microseconds, entry));
+                }
             }
         }
 
@@ -981,6 +984,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             ++this.epoch;
         }
 
+        private int numberOfUpdates = 0;
+        private long nextLog = 0;
+
         private void GetUpdate(object o, Diagnostics.CheckpointPersistedEventArgs args)
         {
             CheckpointUpdate update = args.checkpoint;
@@ -992,6 +998,12 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             lock (this)
             {
+                ++numberOfUpdates;
+                if (this.stopwatch.ElapsedMilliseconds > nextLog)
+                {
+                    this.WriteLog("UPDATES " + numberOfUpdates);
+                    nextLog = this.stopwatch.ElapsedMilliseconds + 1000;
+                }
                 if (update.isTemporary)
                 {
                     if (!(this.state == State.PreparingForRollback || this.state == State.DrainingForRollback))
@@ -1449,22 +1461,28 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
         private HashSet<int> failedProcesses = new HashSet<int>();
         private ManualResetEventSlim failureRestartEvent = null;
 
-        public void FailProcess(int processId)
+        public void FailProcess(HashSet<int> processes)
         {
             lock (this)
             {
-                if (this.failedProcesses.Contains(processId))
+                foreach (var processId in processes)
                 {
-                    throw new ApplicationException("Failing process twice");
-                }
+                    if (this.failedProcesses.Contains(processId))
+                    {
+                        throw new ApplicationException("Failing process twice");
+                    }
 
-                this.failedProcesses.Add(processId);
+                    this.failedProcesses.Add(processId);
+                }
             }
 
-            int restartDelay = 500 + this.random.Next(100);
+            foreach (var processId in processes)
+            {
+                int restartDelay = 2500 + this.random.Next(1000);
 
-            Console.WriteLine("Sending failure request to " + processId + " delay " + restartDelay);
-            this.computation.SimulateFailure(processId, restartDelay);
+                Console.WriteLine("Sending failure request to " + processId + " delay " + restartDelay);
+                this.computation.SimulateFailure(processId, restartDelay);
+            }
         }
 
         public void OnSimulatedProcessRestart(object o, Diagnostics.ProcessRestartedEventArgs args)

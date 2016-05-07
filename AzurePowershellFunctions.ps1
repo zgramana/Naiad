@@ -219,7 +219,7 @@ function Naiad-ExecuteJob
                 $argList = $additionalArguments.Split()
     
                 # augment the arguments with default Naiad args: you may want to edit this. It assumes 7 threads per process
-                $argList += @("-n", $mapping.Count, "-t", "1", "-p", $procID, "--addsetting",  "Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString", $connectionString, "-h")
+                $argList += @("-n", $mapping.Count, "-t", "2", "-p", $procID, "--addsetting",  "Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString", $connectionString, "-h")
                 #$argList += @("-n", $mapping.Count, "-t", "7", "--addsetting",  "Microsoft.Research.Naiad.Cluster.Azure.DefaultConnectionString", $connectionString, "--inlineserializer", "-p", $procID, "-h")
                 # supply the listener ports for all the processes in the job
                 (0..($mapping.Count-1)) | ForEach-Object { $argList += $mapping[$_].ipAddress + ":2101 " }

@@ -428,9 +428,10 @@ namespace Microsoft.Research.Naiad.Scheduling
 
         internal void WriteLogEntry(string format, params object[] args)
         {
-            lock (this)
+            var log = this.CheckpointLog;
+            lock (log)
             {
-                this.CheckpointLog.WriteLine(format, args);
+                log.WriteLine(format, args);
             }
         }
 

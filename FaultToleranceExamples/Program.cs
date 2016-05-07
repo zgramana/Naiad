@@ -135,17 +135,24 @@ namespace FaultToleranceExamples
                 public long count;
                 public long entryTicks;
                 public long EntryTicks { get { return this.entryTicks; } set { this.entryTicks = value; } }
+                public int batchNumber;
 
                 public Record(HTRecord large)
                 {
                     this.key = large.key;
                     this.count = -1;
                     this.entryTicks = large.entryTicks;
+                    this.batchNumber = large.batchNumber;
                 }
 
                 public bool Equals(Record other)
                 {
-                    return key == other.key && EntryTicks == other.EntryTicks && count == other.count;
+                    return key == other.key && EntryTicks == other.EntryTicks && count == other.count && batchNumber == other.batchNumber;
+                }
+
+                public override int GetHashCode()
+                {
+                    return key + (int)(count & 0xffffff) + (int)(entryTicks & 0xffffff) + batchNumber;
                 }
 
                 public override string ToString()
@@ -189,7 +196,16 @@ namespace FaultToleranceExamples
 
             public Stream<Record, Epoch> Compute(Stream<Record, Epoch> input)
             {
-                return input;
+                //return input;
+                Random random = new Random();
+                var slow1 = input.Select(r => r);
+                var reduce1 = slow1.PartitionBy(r => r.key * 98347);
+                //return reduce1;
+                var slow2 = reduce1.Select(r => r);
+                var reduce2 = slow2.PartitionBy(r => random.Next(65536));
+                var slow3 = reduce2.Select(r => r);
+                var reduce3 = slow3.GroupBy(r => r.key, (k, r) => new Record[] { r.First()} );
+                return reduce3;
             }
 
             public int reduceStage;
@@ -202,26 +218,34 @@ namespace FaultToleranceExamples
             {
                 this.source = new SubBatchDataSource<HTRecord, Epoch>();
 
-                Placement placement =
+                Placement reducePlacement =
                     new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
-                        Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
+                        Enumerable.Range(0, 1));
+                var computeBase = (computation.Controller.Configuration.WorkerCount == 1) ? 0 : 1;
+                var computeRange = computation.Controller.Configuration.WorkerCount - computeBase;
+                Placement computePlacement =
+                    new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
+                        Enumerable.Range(computeBase, computeRange));
 
                 Stream<Record, Epoch> computed;
                 Stream<Pair<long, long>, Epoch> window;
 
-                using (var p = computation.WithPlacement(placement))
+                using (var cp = computation.WithPlacement(computePlacement))
                 {
-                    var reduced = computation.BatchedEntry<Record, Epoch>(c =>
-                            {
-                                var input = computation.NewInput(this.source)
-                                    .SetCheckpointType(CheckpointType.CachingInput)
-                                    .SetCheckpointPolicy(s => new CheckpointEagerly());
-                                return this.Reduce(input);
-                            }, "ExitSlowBatch");
-
+                    Stream<Record, Epoch> reduced;
+                    using (var rp = computation.WithPlacement(reducePlacement))
+                    {
+                        reduced = computation.BatchedEntry<Record, Epoch>(c =>
+                                {
+                                    var input = computation.NewInput(this.source)
+                                        .SetCheckpointType(CheckpointType.CachingInput)
+                                        .SetCheckpointPolicy(s => new CheckpointEagerly());
+                                    return this.Reduce(input);
+                                }, "ExitSlowBatch");
+                    }
                     computed = this.Compute(reduced);
 
-                    window = this.TimeWindow(reduced, placement.Count);
+                    window = this.TimeWindow(reduced, computePlacement.Count);
                 }
 
                 return computed.PairWith(window);
@@ -238,7 +262,7 @@ namespace FaultToleranceExamples
         {
             private Configuration config;
             private StreamWriter checkpointLog = null;
-            internal StreamWriter CheckpointLog
+            private StreamWriter CheckpointLog
             {
                 get
                 {
@@ -894,8 +918,8 @@ namespace FaultToleranceExamples
 
                 this.dataSource = new SubBatchDataSource<Record, BatchIn<Epoch>>();
 
-                Placement fastPlacement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range), Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
-                this.workerCount = this.range * computation.Controller.Configuration.WorkerCount;
+                Placement fastPlacement = new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range), Enumerable.Range(0, 1));
+                this.workerCount = this.range * 1;
 
                 Placement senderPlacement = new Placement.ProcessRange(Enumerable.Range(this.queryProc, 1), Enumerable.Range(0, 1));
 
@@ -1099,25 +1123,33 @@ namespace FaultToleranceExamples
             {
                 this.source = new SubBatchDataSource<HTRecord, BatchIn<Epoch>>();
 
-                Placement ccPlacement =
-                    new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
-                        Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
                 Placement slowPlacement =
                     new Placement.ProcessRange(Enumerable.Range(slow.baseProc, slow.range),
-                        Enumerable.Range(0, computation.Controller.Configuration.WorkerCount));
+                        Enumerable.Range(0, 1));
+                Placement reducePlacement =
+                    new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
+                        Enumerable.Range(0, 1));
+                var computeBase = (computation.Controller.Configuration.WorkerCount == 1) ? 0 : 1;
+                var computeRange = computation.Controller.Configuration.WorkerCount - computeBase;
+                Placement ccPlacement =
+                    new Placement.ProcessRange(Enumerable.Range(this.baseProc, this.range),
+                        Enumerable.Range(computeBase, computeRange));
 
                 var slowOutput = slow.Make(computation);
 
                 Stream<Pair<long, long>, BatchIn<Epoch>> ccWindow;
 
-                using (var p = computation.WithPlacement(ccPlacement))
+                using (var cp = computation.WithPlacement(ccPlacement))
                 {
                     var forCC = computation.BatchedEntry<Record, Epoch>(c =>
                         {
                             Collection<Record, BatchIn<Epoch>> cc;
 
-                            var reduced = computation
-                                .BatchedEntry<Record, BatchIn<Epoch>>(ic =>
+                            Stream<Record, BatchIn<Epoch>> reduced;
+                            using (var rp = computation.WithPlacement(reducePlacement))
+                            {
+                                reduced = computation
+                                    .BatchedEntry<Record, BatchIn<Epoch>>(ic =>
                                     {
                                         Stream<HTRecord, BatchIn<BatchIn<Epoch>>> input;
                                         // all the batches come from the slow vertices
@@ -1130,6 +1162,7 @@ namespace FaultToleranceExamples
                                         }
                                         return this.Reduce(input);
                                     }, "CCPipeLineExitInnerBatch");
+                            }
 
                             var asCollection = reduced.Select(r =>
                                 {
@@ -1221,21 +1254,76 @@ namespace FaultToleranceExamples
             }
         }
 
-        public struct HTRecord : IEquatable<HTRecord>
+        public struct S64
+        {
+            public ulong junk0;
+            public ulong junk1;
+            public ulong junk2;
+            public ulong junk3;
+            public ulong junk4;
+            public ulong junk5;
+            public ulong junk6;
+            public ulong junk7;
+        }
+
+        public struct S256
+        {
+            public S64 junk0;
+            public S64 junk1;
+            public S64 junk2;
+            public S64 junk3;
+            public S64 junk4;
+            public S64 junk5;
+            public S64 junk6;
+            public S64 junk7;
+        }
+
+        public struct S2048
+        {
+            public S256 junk0;
+            public S256 junk1;
+            public S256 junk2;
+            public S256 junk3;
+            public S256 junk4;
+            public S256 junk5;
+            public S256 junk6;
+            public S256 junk7;
+        }
+
+        public struct S16384
+        {
+            public S2048 junk0;
+            public S2048 junk1;
+            public S2048 junk2;
+            public S2048 junk3;
+            public S2048 junk4;
+            public S2048 junk5;
+            public S2048 junk6;
+            public S2048 junk7;
+        }
+
+        public struct HTRecord
         {
             public int key;
             public int otherKey;
             public long entryTicks;
+            public int batchNumber;
+            public S256 junk;
 
             public bool Equals(HTRecord other)
             {
                 return key == other.key && otherKey == other.otherKey && entryTicks == other.entryTicks;
             }
+
+            public override int GetHashCode()
+            {
+                return key + 123412324 * otherKey + (int)(entryTicks % 0xffffff) + batchNumber;
+            }
         }
 
         private Configuration config;
         private StreamWriter checkpointLog = null;
-        internal StreamWriter CheckpointLog
+        private StreamWriter CheckpointLog
         {
             get
             {
@@ -1264,7 +1352,7 @@ namespace FaultToleranceExamples
 
             // We ensure that each key has at least one edge present that is never removed, and those are introduced
             // using this method
-            private IEnumerable<HTRecord> MakeAllKeyBatch(Random random, long entryTicks)
+            private IEnumerable<HTRecord> MakeAllKeyBatch(Random random, long entryTicks, int batchNumber)
             {
                 for (int i = (this.processId % this.processes); i < Program.numberOfKeys; i += this.processes)
                 {
@@ -1272,17 +1360,18 @@ namespace FaultToleranceExamples
                     {
                         key = i,
                         otherKey = random.Next(numberOfKeys),
-                        entryTicks = entryTicks
+                        entryTicks = entryTicks,
+                        batchNumber = batchNumber
                     };
                 }
             }
 
             // keep track of the times of batches we put in, so we can remove the exact same data later
-            private readonly Queue<long> batchTimes = new Queue<long>();
+            private readonly Queue<Pair<long,int>> batchTimes = new Queue<Pair<long,int>>();
             private Random introduceRandom;
             private Random removeRandom;
 
-            private IEnumerable<HTRecord> MakeBatch(Random random, int batchSize, long entryTicks)
+            private IEnumerable<HTRecord> MakeBatch(Random random, int batchSize, long entryTicks, int batchNumber)
             {
                 for (int i = 0; i < batchSize; ++i)
                 {
@@ -1290,7 +1379,8 @@ namespace FaultToleranceExamples
                     {
                         key = random.Next(Program.numberOfKeys),
                         otherKey = random.Next(Program.numberOfKeys),
-                        entryTicks = entryTicks
+                        entryTicks = entryTicks,
+                        batchNumber = batchNumber
                     };
                 }
             }
@@ -1312,15 +1402,16 @@ namespace FaultToleranceExamples
                 }
 
                 // the batch is being added, so save its time
-                this.batchTimes.Enqueue(entryTicks);
+                this.batchTimes.Enqueue(entryTicks.PairWith(batchesReturned));
 
-                inBatch = this.MakeAllKeyBatch(this.introduceRandom, entryTicks).Concat(this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks)).ToArray();
+                inBatch = this.MakeAllKeyBatch(this.introduceRandom, entryTicks, batchesReturned).Concat(this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks, batchesReturned)).ToArray();
 
                 if (this.batchesReturned >= Program.htInitialBatches)
                 {
                     // the batch is being removed, so look up the time that it was put in
-                    entryTicks = -(this.batchTimes.Dequeue());
-                    outBatch = this.MakeAllKeyBatch(this.removeRandom, entryTicks).Concat(this.MakeBatch(this.removeRandom, Program.htBatchSize, entryTicks)).ToArray();
+                    var removal = this.batchTimes.Dequeue();
+                    entryTicks = -removal.First;
+                    outBatch = this.MakeAllKeyBatch(this.removeRandom, entryTicks, removal.Second).Concat(this.MakeBatch(this.removeRandom, Program.htBatchSize, entryTicks, removal.Second)).ToArray();
                 }
 
                 ++this.batchesReturned;
@@ -1336,16 +1427,30 @@ namespace FaultToleranceExamples
 
         private int currentCompletedSlowEpoch = -1;
 
-        public void AcceptSlowStableTime(Epoch slowTime)
+        public void AcceptCCStableTime(BatchIn<Epoch> ccTime)
         {
-
-            lock (this)
+            KeyValuePair<BatchIn<Epoch>, Pair<long, long>>[] earlier;
+            lock (this.ccBatchCompleteTime)
             {
-                if (slowTime.epoch > this.currentCompletedSlowEpoch)
+                earlier = this.ccBatchCompleteTime
+                    .Where(b => FTFrontier.IsLessThanOrEqualTo(b.Key.ToPointstamp(0), ccTime.ToPointstamp(0)))
+                    .ToArray();
+                foreach (var batch in earlier.Select(b => b.Key))
                 {
-                    this.currentCompletedSlowEpoch = slowTime.epoch;
-                    Console.WriteLine("Slow stable epoch " + this.currentCompletedSlowEpoch);
+                    this.ccBatchCompleteTime.Remove(batch);
                 }
+            }
+
+            var totalTicks = this.computation.Controller.Stopwatch.ElapsedTicks;
+            var totalMicroSeconds = (totalTicks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
+
+            long now = DateTime.Now.Ticks;
+            foreach (var ccBatch in earlier)
+            {
+                double latency1 = (double)(now - ccBatch.Value.First) / (double)TimeSpan.TicksPerMillisecond;
+                double latency2 = (double)(now - ccBatch.Value.Second) / (double)TimeSpan.TicksPerMillisecond;
+                this.WriteLog("CS" + ccBatch.Key + " " + latency1 + " " + latency2 + " " + totalMicroSeconds);
+                Console.WriteLine("CC stable " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + latency1 + " " + latency2);
             }
         }
 
@@ -1363,12 +1468,50 @@ namespace FaultToleranceExamples
                 }
             }
 
+            var totalTicks = this.computation.Controller.Stopwatch.ElapsedTicks;
+            var totalMicroSeconds = (totalTicks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
+
             long now = DateTime.Now.Ticks;
             foreach (var ccBatch in earlier)
             {
                 double latency = (double)(now - ccBatch.Value) / (double)TimeSpan.TicksPerMillisecond;
-                this.WriteLog("C" + ccBatch.Key + " " + latency);
+                this.WriteLog("C" + ccBatch.Key + " " + latency + " " + totalMicroSeconds);
                 Console.WriteLine("CC reduce " + ccBatch.Key + " " + ccBatch.Value + "->" + now + ": " + latency);
+            }
+        }
+
+        public void AcceptSlowStableTime(Epoch slowTime)
+        {
+            lock (this)
+            {
+                if (slowTime.epoch > this.currentCompletedSlowEpoch)
+                {
+                    this.currentCompletedSlowEpoch = slowTime.epoch;
+                }
+            }
+
+            KeyValuePair<Epoch, Pair<long, long>>[] earlier;
+            lock (this.slowBatchCompleteTime)
+            {
+                earlier = this.slowBatchCompleteTime
+                    .Where(b => FTFrontier.IsLessThanOrEqualTo(b.Key.ToPointstamp(0), slowTime.ToPointstamp(0)))
+                    .ToArray();
+                foreach (var batch in earlier.Select(b => b.Key))
+                {
+                    this.slowBatchCompleteTime.Remove(batch);
+                }
+            }
+
+            var totalTicks = this.computation.Controller.Stopwatch.ElapsedTicks;
+            var totalMicroSeconds = (totalTicks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
+
+            long now = DateTime.Now.Ticks;
+            foreach (var slowBatch in earlier)
+            {
+                double latency1 = (double)(now - slowBatch.Value.First) / (double)TimeSpan.TicksPerMillisecond;
+                double latency2 = (double)(now - slowBatch.Value.Second) / (double)TimeSpan.TicksPerMillisecond;
+                this.WriteLog("SS" + slowBatch.Key + " " + latency1 + " " + latency2 + " " + totalMicroSeconds);
+                Console.WriteLine("Slow stable " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + latency1 + " " + latency2);
             }
         }
 
@@ -1386,11 +1529,14 @@ namespace FaultToleranceExamples
                 }
             }
 
+            var totalTicks = this.computation.Controller.Stopwatch.ElapsedTicks;
+            var totalMicroSeconds = (totalTicks * 1000000L) / System.Diagnostics.Stopwatch.Frequency;
+
             long now = DateTime.Now.Ticks;
             foreach (var slowBatch in earlier)
             {
                 double latency = (double)(now - slowBatch.Value) / (double)TimeSpan.TicksPerMillisecond;
-                this.WriteLog("S" + slowBatch.Key + " " + latency);
+                this.WriteLog("S" + slowBatch.Key + " " + latency + " " + totalMicroSeconds);
                 Console.WriteLine("Slow reduce " + slowBatch.Key + " " + slowBatch.Value + "->" + now + ": " + latency);
             }
         }
@@ -1405,6 +1551,14 @@ namespace FaultToleranceExamples
             int slowSubBatch = 0;
             BatchIn<Epoch> sendingCCBatch = new BatchIn<Epoch>(new Epoch(0), 0);
             int CCSubBatch = 0;
+            lock (this.slowBatchCompleteTime)
+            {
+                this.slowBatchCompleteTime[sendingSlowBatch] = DateTime.Now.Ticks.PairWith(-1L);
+            }
+            lock (this.ccBatchCompleteTime)
+            {
+                this.ccBatchCompleteTime[sendingCCBatch] = DateTime.Now.Ticks.PairWith(-1L);
+            }
 
             while (true)
             {
@@ -1413,23 +1567,43 @@ namespace FaultToleranceExamples
 
                 if (nowMs > nextSlowBatch)
                 {
-                    sendingSlowBatch = new Epoch(sendingSlowBatch.epoch + 1);
-                    slowSubBatch = 0;
-                    nextSlowBatch += Program.slowBatchTime;
+                    lock (this.slowBatchCompleteTime)
+                    {
+                        long started = this.slowBatchCompleteTime[sendingSlowBatch].First;
+                        this.slowBatchCompleteTime[sendingSlowBatch] = started.PairWith(now);
+                        sendingSlowBatch = new Epoch(sendingSlowBatch.epoch + 1);
+                        slowSubBatch = 0;
+                        nextSlowBatch += Program.slowBatchTime;
+                        this.slowBatchCompleteTime[sendingSlowBatch] = now.PairWith(-1L);
+                    }
                 }
 
                 if (nowMs > nextCCBatch)
                 {
-                    sendingCCBatch = new BatchIn<Epoch>(sendingCCBatch.outerTime, sendingCCBatch.batch + 1);
-                    CCSubBatch = 0;
-                    nextCCBatch += Program.ccBatchTime;
+                    lock (this.ccBatchCompleteTime)
+                    {
+                        long started = this.ccBatchCompleteTime[sendingCCBatch].First;
+                        this.ccBatchCompleteTime[sendingCCBatch] = started.PairWith(now);
+                        sendingCCBatch = new BatchIn<Epoch>(sendingCCBatch.outerTime, sendingCCBatch.batch + 1);
+                        CCSubBatch = 0;
+                        nextCCBatch += Program.ccBatchTime;
+                        this.ccBatchCompleteTime[sendingCCBatch] = now.PairWith(-1L);
+                    }
                 }
 
                 lock (this)
                 {
                     if (this.currentCompletedSlowEpoch > sendingCCBatch.outerTime.epoch)
                     {
-                        sendingCCBatch = new BatchIn<Epoch>(new Epoch(this.currentCompletedSlowEpoch), 0);
+                        lock (this.ccBatchCompleteTime)
+                        {
+                            long started = this.ccBatchCompleteTime[sendingCCBatch].First;
+                            this.ccBatchCompleteTime[sendingCCBatch] = started.PairWith(now);
+                            sendingCCBatch = new BatchIn<Epoch>(new Epoch(this.currentCompletedSlowEpoch), 0);
+                            CCSubBatch = 0;
+                            nextCCBatch = nowMs + Program.ccBatchTime;
+                            this.ccBatchCompleteTime[sendingCCBatch] = now.PairWith(-1L);
+                        }
                     }
                 }
 
@@ -1468,7 +1642,10 @@ namespace FaultToleranceExamples
         private BatchIn<Epoch> currentCCBatch = new BatchIn<Epoch>(new Epoch(0), 0);
 
         private readonly Dictionary<BatchIn<Epoch>, long> slowBatchEntryTime = new Dictionary<BatchIn<Epoch>, long>();
+        private readonly Dictionary<Epoch, Pair<long, long>> slowBatchCompleteTime = new Dictionary<Epoch, Pair<long, long>>();
         private readonly Dictionary<BatchIn<BatchIn<Epoch>>, long> ccBatchEntryTime = new Dictionary<BatchIn<BatchIn<Epoch>>, long>();
+        private readonly Dictionary<BatchIn<Epoch>, long> ccBatchStartTime = new Dictionary<BatchIn<Epoch>, long>();
+        private readonly Dictionary<BatchIn<Epoch>, Pair<long, long>> ccBatchCompleteTime = new Dictionary<BatchIn<Epoch>, Pair<long, long>>();
 
         void SendBatch(long entryTicks, Epoch slowBatch, BatchIn<Epoch> ccBatch)
         {
@@ -1529,16 +1706,19 @@ namespace FaultToleranceExamples
                 BatchIn<Epoch> ccTime = new BatchIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b);
                 if (stamp.Timestamp.c >= Int32.MaxValue - 1)
                 {
+                    this.AcceptCCStableTime(ccTime);
                     this.perfect.AcceptCCDataStable(ccTime);
                 }
                 else if (ccTime.batch > 0)
                 {
                     ccTime = new BatchIn<Epoch>(new Epoch(stamp.Timestamp.a), stamp.Timestamp.b - 1);
+                    this.AcceptCCStableTime(ccTime);
                     this.perfect.AcceptCCDataStable(ccTime);
                 }
                 else if (ccTime.outerTime.epoch > 0)
                 {
                     ccTime = new BatchIn<Epoch>(new Epoch(stamp.Timestamp.a-1), Int32.MaxValue - 1);
+                    this.AcceptCCStableTime(ccTime);
                     this.perfect.AcceptCCDataStable(ccTime);
                 }
             }
@@ -1702,6 +1882,14 @@ namespace FaultToleranceExamples
                         i += 2;
                         break;
 
+                    case "-big":
+                        numberOfKeys = 10000;
+                        htBatchSize = 100;
+                        htInitialBatches = 1000;
+                        slowBatchTime = 5 * 60 * 1000;
+                        ++i;
+                        break;
+
                     case "-azure":
                         useAzure = true;
                         ++i;
@@ -1841,11 +2029,20 @@ namespace FaultToleranceExamples
 
                     while (true)
                     {
+                        Random random = new Random();
                         //System.Threading.Thread.Sleep(Timeout.Infinite);
                         System.Threading.Thread.Sleep(failureIntervalSecs * 1000);
-                        if (this.config.Processes > 2)
+                        int failBase = Math.Max(slowBase, 1);
+                        int failable = ccBase + ccRange - failBase;
+                        if (failable > 0 && failable + slowBase <= fpBase)
                         {
-                            manager.FailProcess(1);
+                            int toFail = random.Next(10);
+                            HashSet<int> processes = new HashSet<int>();
+                            for (int p = 0; p < toFail; ++p)
+                            {
+                                processes.Add(failBase + random.Next(failable));
+                            }
+                            manager.FailProcess(processes);
                         }
 
                         manager.PerformRollback(failSlow, failMedium, failFast);

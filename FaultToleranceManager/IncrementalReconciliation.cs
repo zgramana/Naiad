@@ -82,11 +82,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
     internal struct LexStamp// : IEquatable<LexStamp>, IComparable<LexStamp>
     {
         public int value;
-        private const int ABITS = 15;
+        private const int ABITS = 10;
         private const int AMAX = (1 << ABITS) - 1;
-        private const int BBITS = 8;
+        private const int BBITS = 10;
         private const int BMAX = (1 << BBITS) - 1;
-        private const int CBITS = 8;
+        private const int CBITS = 11;
         private const int CMAX = (1 << CBITS) - 1;
         private const int AMASK = AMAX << (BBITS + CBITS);
         private const int BMASK = BMAX << CBITS;

@@ -364,7 +364,7 @@ namespace Microsoft.Research.Naiad
         private Thread restoreThread;
 
         private StreamWriter checkpointLog = null;
-        internal StreamWriter CheckpointLog
+        private StreamWriter CheckpointLog
         {
             get
             {
@@ -433,7 +433,7 @@ namespace Microsoft.Research.Naiad
 
                 long startTicks = this.stopwatch.ElapsedTicks;
 
-                this.Pause(s => { });
+                this.Pause(s => Console.WriteLine(s));
 
                 long pauseTicks = this.stopwatch.ElapsedTicks;
 
@@ -520,9 +520,9 @@ namespace Microsoft.Research.Naiad
 
             foreach (BaseComputation computation in this.baseComputations)
             {
-                StringWriter w = new StringWriter();
-                computation.ProgressTracker.Complain(w);
-                Console.WriteLine(w);
+                //StringWriter w = new StringWriter();
+                //computation.ProgressTracker.Complain(w);
+                //Console.WriteLine(w);
                 // clear out all progress information
                 computation.ProgressTracker.Reset();
                 // let the centralizer forward updates again for the next phase in which everyone sends
