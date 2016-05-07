@@ -216,6 +216,33 @@ namespace Microsoft.Research.Naiad.Dataflow
 
         internal readonly VertexOutputBuffer<S, T> output;
 
+        /// <summary>
+        /// Add count holds at each time in frontier
+        /// </summary>
+        /// <param name="frontier">Antichain of pointstamps to add holds at</param>
+        /// <param name="count">number of holds</param>
+        internal override void UpdateHoldsForFrontier(FTFrontier frontier, long count)
+        {
+            if (frontier.Empty)
+            {
+                T initialTime = default(T).InitializeFrom(this.Stage.DefaultVersion, this.Stage.DefaultVersion.Timestamp.Length);
+                this.UpdateLexicalRecordCounts(initialTime, count);
+            }
+            else if (frontier.Complete)
+            {
+                // nothing to do
+            }
+            else
+            {
+                foreach (var stamp in frontier.ToNextPointstamps(this.Stage.DefaultVersion))
+                {
+                    T t = default(T).InitializeFrom(this.Stage.DefaultVersion, this.Stage.DefaultVersion.Timestamp.Length);
+                    this.UpdateLexicalRecordCounts(t, count);
+                }
+            }
+            this.scheduler.State(this.Stage.InternalComputation).Producer.Start();
+        }
+
         internal void UpdateLexicalRecordCounts(T time, long count)
         {
             Pointstamp stamp = time.ToPointstamp(this.Stage.StageId);

@@ -81,6 +81,13 @@ namespace Microsoft.Research.Naiad.Dataflow
 
         internal abstract void RestoreProgressUpdates(bool fromCheckpoint);
 
+        /// <summary>
+        /// Add count holds at each time in frontier
+        /// </summary>
+        /// <param name="frontier">Antichain of pointstamps to add holds at</param>
+        /// <param name="count">number of holds</param>
+        internal abstract void UpdateHoldsForFrontier(FTFrontier frontier, long count);
+
         private List<IReachabilityListener> reachabilityListeners = new List<IReachabilityListener>();
         internal void AddReachabilityListener(IReachabilityListener listener)
         {
@@ -307,6 +314,31 @@ namespace Microsoft.Research.Naiad.Dataflow
         }
 
         /// <summary>
+        /// Add count holds at each time in frontier
+        /// </summary>
+        /// <param name="frontier">Antichain of pointstamps to add holds at</param>
+        /// <param name="count">number of holds</param>
+        internal override void UpdateHoldsForFrontier(FTFrontier frontier, long count)
+        {
+            if (frontier.Empty)
+            {
+                this.scheduler.State(this.Stage.InternalComputation).Producer.UpdateRecordCounts(this.Stage.DefaultVersion, count);
+            }
+            else if (frontier.Complete)
+            {
+                // nothing to do
+            }
+            else
+            {
+                foreach (var stamp in frontier.ToNextPointstamps(this.Stage.DefaultVersion))
+                {
+                    this.scheduler.State(this.Stage.InternalComputation).Producer.UpdateRecordCounts(stamp, count);
+                }
+            }
+            this.scheduler.State(this.Stage.InternalComputation).Producer.Start();
+        }
+
+        /// <summary>
         /// Called by the logging mechanism whenever a new frontier has passed: the vertex will
         /// never roll back beyond this frontier
         /// </summary>
@@ -506,7 +538,8 @@ namespace Microsoft.Research.Naiad.Dataflow
             switch (mode)
             {
                 case ReplayMode.RollbackVertex:
-                    this.Checkpointer.RestoreToFrontier();
+                    FTFrontier frontier = this.Checkpointer.RestoreToFrontier();
+                    this.UpdateHoldsForFrontier(frontier, -1L);
                     break;
 
                 case ReplayMode.ReplayVertex:

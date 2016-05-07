@@ -1421,6 +1421,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             lock (this)
             {
+                if (this.temporaryUpdates.Count == 0)
+                {
+                    throw new ApplicationException("No temporary updates received");
+                }
                 if (this.pendingUpdates == null)
                 {
                     // there is no computation, so we have to start it ourselves
@@ -1440,7 +1444,11 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             if (mustStart)
             {
-                this.InjectUpdates(this.temporaryUpdates, null, false);
+                bool didAnything = this.InjectUpdates(this.temporaryUpdates, null, false);
+                if (!didAnything)
+                {
+                    throw new ApplicationException("No temporary updates to inject");
+                }
             }
 
             barrier.Wait();

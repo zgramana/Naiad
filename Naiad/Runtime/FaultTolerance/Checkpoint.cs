@@ -988,7 +988,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
             return maxSentTime;
         }
 
-        internal void RestoreToFrontier()
+        internal FTFrontier RestoreToFrontier()
         {
             FTFrontier frontier = this.vertex.TypedStage.CurrentCheckpoint(this.vertex.VertexId).GetRestorationFrontier();
 
@@ -1004,6 +1004,8 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
 
                 this.Persist(frontier);
             }
+
+            return frontier;
         }
 
         private void ReceiveGCUpdate(int dstStageId, int dstVertexId, FTFrontier lowWatermark)

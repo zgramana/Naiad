@@ -1848,6 +1848,7 @@ namespace FaultToleranceExamples
 
         public void Execute(string[] args)
         {
+            //Logging.LogLevel = LoggingLevel.Info;
             this.config = Configuration.FromArgs(ref args);
             this.config.MaxLatticeInternStaleTimes = 10;
 
@@ -1886,7 +1887,7 @@ namespace FaultToleranceExamples
                         numberOfKeys = 10000;
                         htBatchSize = 100;
                         htInitialBatches = 1000;
-                        slowBatchTime = 5 * 60 * 1000;
+                        slowBatchTime = 60 * 1000;
                         ++i;
                         break;
 

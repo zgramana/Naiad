@@ -195,7 +195,21 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         public void ResendLoggedMessages()
         {
             this.logger.FlushAsync().Wait();
-            this.logger.ReplayLog(this.pendingLoggedBoundaries);
+            try
+            {
+                this.logger.ReplayLog(this.pendingLoggedBoundaries);
+            }
+            catch (Exception e)
+            {
+                System.IO.StringWriter w = new System.IO.StringWriter();
+                foreach (var b in this.pendingLoggedBoundaries)
+                {
+                    w.WriteLine(b.time + ": " + b.location.index + "." + b.location.position + " -- " + b.isStart);
+                }
+                throw new ApplicationException("Replay log exception " + this.parent.stage + "." + this.parent.vertex.VertexId + "\n"
+                    + w.ToString()
+                    + e.ToString());
+            }
             this.pendingLoggedBoundaries = null;
             // re-do garbage collection, since this will have been suppressed while we were waiting to replay the log
             FTFrontier lowWatermark = this.sortedReceiverFrontiers.Keys.First();

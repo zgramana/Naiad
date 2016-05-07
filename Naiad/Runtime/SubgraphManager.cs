@@ -1116,9 +1116,11 @@ namespace Microsoft.Research.Naiad
 
             long startTicks = stopwatch.ElapsedTicks;
 
+            Dictionary<Pair<int, int>, FTFrontier> rollbackFrontiers = new Dictionary<Pair<int,int>,FTFrontier>();
             foreach (CheckpointLowWatermark frontier in frontiers)
             {
                 this.stages[frontier.stageId].SetRollbackFrontier(frontier);
+                rollbackFrontiers.Add(frontier.stageId.PairWith(frontier.vertexId), frontier.frontier);
             }
 
             long frontierTicks = stopwatch.ElapsedTicks;
@@ -1152,17 +1154,25 @@ namespace Microsoft.Research.Naiad
 
             long materializeTicks = stopwatch.ElapsedTicks;
 
-            Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp,long>();
-            foreach (InputStage input in this.inputs)
+            foreach (var stage in this.stages.Where(s => s.Value.CheckpointType != CheckpointType.None))
             {
-                int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
-                foreach (var time in input.InitialTimes)
+                foreach (var v in stage.Value.Vertices)
                 {
-                    inputHolds.Add(time, numberOfLocalInputs);
+                    v.UpdateHoldsForFrontier(rollbackFrontiers[stage.Value.StageId.PairWith(v.VertexId)], 1L);
                 }
             }
-            // don't let anything shut down until we have finished repairing all the vertices' progress
-            this.progressTracker.Aggregator.OnRecv(inputHolds);
+
+            //Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp,long>();
+            //foreach (InputStage input in this.inputs)
+            //{
+            //    int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
+            //    foreach (var time in input.InitialTimes)
+            //    {
+            //        inputHolds.Add(time, numberOfLocalInputs);
+            //    }
+            //}
+            //// don't let anything shut down until we have finished repairing all the vertices' progress
+            //this.progressTracker.Aggregator.OnRecv(inputHolds);
 
             this.checkpointTracker.RestoreProgress();
 
@@ -1294,17 +1304,17 @@ namespace Microsoft.Research.Naiad
                 scheduler.StopRestoring();
             }
 
-            Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp, long>();
-            // remove the fake holds from the inputs now that progress has been repaired
-            foreach (InputStage input in this.inputs)
-            {
-                int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
-                foreach (var time in input.InitialTimes)
-                {
-                    inputHolds.Add(time, -numberOfLocalInputs);
-                }
-            }
-            this.progressTracker.Aggregator.OnRecv(inputHolds);
+            //Dictionary<Pointstamp, long> inputHolds = new Dictionary<Pointstamp, long>();
+            //// remove the fake holds from the inputs now that progress has been repaired
+            //foreach (InputStage input in this.inputs)
+            //{
+            //    int numberOfLocalInputs = this.stages[input.InputId].Vertices.Count();
+            //    foreach (var time in input.InitialTimes)
+            //    {
+            //        inputHolds.Add(time, -numberOfLocalInputs);
+            //    }
+            //}
+            //this.progressTracker.Aggregator.OnRecv(inputHolds);
 
             this.progressTracker.ForceFlush();
 

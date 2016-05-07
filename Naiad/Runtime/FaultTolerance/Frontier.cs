@@ -107,6 +107,18 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
         }
 
         /// <summary>
+        /// Convert the frontier to a minimal antichain of pointstamps, each incremented
+        /// </summary>
+        /// <param name="defaultVersion">default pointstamp for the frontier's stage</param>
+        /// <returns>the incremented minimal antichain representing the frontier</returns>
+        public Pointstamp[] ToNextPointstamps(Pointstamp defaultVersion)
+        {
+            return this.ToPointstamps(defaultVersion)
+                .Select(p => SmallestLarger(p))
+                .ToArray();
+        }
+
+        /// <summary>
         /// Convert the frontier to a minimal antichain of pointstamps
         /// </summary>
         /// <param name="defaultVersion">default pointstamp for the frontier's stage</param>
@@ -331,6 +343,25 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
                 ++incremented.Timestamp[incremented.Timestamp.Length - 1];
             }
             return incremented;
+        }
+
+        private static Pointstamp SmallestLarger(Pointstamp pointstamp)
+        {
+            Pointstamp incremented = new Pointstamp(pointstamp);
+            for (int i = incremented.Timestamp.Length; i > 0; --i)
+            {
+                if (incremented.Timestamp[i - 1] != Int32.MaxValue)
+                {
+                    ++incremented.Timestamp[i - 1];
+                    return incremented;
+                }
+                else
+                {
+                    // set to zero and go around the loop to increment the next most significant
+                    incremented.Timestamp[i - 1] = 0;
+                }
+            }
+            throw new ApplicationException("Called SmallestLarger on maximal pointstamp " + pointstamp);
         }
 
         /// <summary>
