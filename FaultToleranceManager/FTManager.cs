@@ -438,6 +438,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                     }
                     var srcs = time.Select(m => m.srcDenseStage).ToArray();
                     state.deliveredMessages.Add(time.Key, srcs);
+                    this.numberOfDelivered += srcs.Length;
                     if (this.logLevel == LogLevel.Verbose)
                     {
                         foreach (var src in srcs)
@@ -459,6 +460,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                         throw new ApplicationException("Stale Delivered notification");
                     }
                     state.deliveredNotifications.Add(time);
+                    ++this.numberOfNotifications;
                     if (this.logLevel == LogLevel.Verbose)
                     {
                         this.WriteLog(node.StageId(this) + "." + node.VertexId + " " + time.Timestamp + " AN");
@@ -492,6 +494,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                                     srcTime = new LexStamp(upstreamTime.First),
                                     dstTime = new LexStamp(downstreamTime)
                                 }, updateWeight));
+                            ++this.numberOfDiscarded;
                             if (!update.isTemporary)
                             {
                                 bool found = false;
@@ -984,7 +987,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             ++this.epoch;
         }
 
-        private int numberOfUpdates = 0;
+        private long numberOfUpdates = 0;
+        private long numberOfNotifications = 0;
+        private long numberOfDelivered = 0;
+        private long numberOfDiscarded = 0;
         private long nextLog = 0;
 
         private void GetUpdate(object o, Diagnostics.CheckpointPersistedEventArgs args)
@@ -998,10 +1004,10 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
 
             lock (this)
             {
-                ++numberOfUpdates;
+                ++this.numberOfUpdates;
                 if (this.stopwatch.ElapsedMilliseconds > nextLog)
                 {
-                    this.WriteLog("UPDATES " + numberOfUpdates);
+                    this.WriteLog("UPDATES " + this.numberOfUpdates + " " + this.numberOfNotifications + " " + this.numberOfDelivered + " " + this.numberOfDiscarded);
                     nextLog = this.stopwatch.ElapsedMilliseconds + 1000;
                 }
                 if (update.isTemporary)

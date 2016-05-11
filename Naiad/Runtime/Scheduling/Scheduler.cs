@@ -317,29 +317,9 @@ namespace Microsoft.Research.Naiad.Scheduling
 
             if (fromThisScheduler)
             {
-                if (computationStates == null)
-                {
-                    throw new ApplicationException("null cs");
-                }
-                if (item.Vertex == null)
-                {
-                    throw new ApplicationException("null vertex");
-                }
-                if (item.Vertex.Stage == null)
-                {
-                    throw new ApplicationException("null stage");
-                }
-                if (item.Vertex.Stage.InternalComputation == null)
-                {
-                    throw new ApplicationException("null internal");
-                }
-                if (computationStates[item.Vertex.Stage.InternalComputation.Index] == null)
-                {
-                    throw new ApplicationException("null state");
-                }
                 if (computationStates[item.Vertex.Stage.InternalComputation.Index].WorkItems == null)
                 {
-                    throw new ApplicationException("null list");
+                    throw new ApplicationException("Scheduler shut down early");
                 }
                 computationStates[item.Vertex.Stage.InternalComputation.Index].WorkItems.Add(item);
                 return 0;

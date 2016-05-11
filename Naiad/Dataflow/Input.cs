@@ -221,12 +221,12 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// </summary>
         /// <param name="frontier">Antichain of pointstamps to add holds at</param>
         /// <param name="count">number of holds</param>
-        internal override void UpdateHoldsForFrontier(FTFrontier frontier, long count)
+        internal override void UpdateHoldsForFrontier(FTFrontier frontier, int count)
         {
             if (frontier.Empty)
             {
                 T initialTime = default(T).InitializeFrom(this.Stage.DefaultVersion, this.Stage.DefaultVersion.Timestamp.Length);
-                this.UpdateLexicalRecordCounts(initialTime, count);
+                this.LocalHoldLexicalRecordCounts(initialTime, count);
             }
             else if (frontier.Complete)
             {
@@ -236,11 +236,27 @@ namespace Microsoft.Research.Naiad.Dataflow
             {
                 foreach (var stamp in frontier.ToNextPointstamps(this.Stage.DefaultVersion))
                 {
-                    T t = default(T).InitializeFrom(this.Stage.DefaultVersion, this.Stage.DefaultVersion.Timestamp.Length);
-                    this.UpdateLexicalRecordCounts(t, count);
+                    T t = default(T).InitializeFrom(stamp, stamp.Timestamp.Length);
+                    this.LocalHoldLexicalRecordCounts(t, count);
                 }
             }
-            this.scheduler.State(this.Stage.InternalComputation).Producer.Start();
+        }
+
+        internal void LocalHoldLexicalRecordCounts(T time, int count)
+        {
+            Pointstamp stamp = time.ToPointstamp(this.Stage.StageId);
+            for (int i = stamp.Timestamp.Length; i > 0; --i)
+            {
+                if (i < stamp.Timestamp.Length)
+                {
+                    if (stamp.Timestamp[i - 1] < int.MaxValue)
+                    {
+                        ++stamp.Timestamp[i - 1];
+                    }
+                    stamp.Timestamp[i] = 0;
+                }
+                this.Stage.InternalComputation.ProgressTracker.MakeLocalHold(stamp, count);
+            }
         }
 
         internal void UpdateLexicalRecordCounts(T time, long count)

@@ -1158,7 +1158,7 @@ namespace Microsoft.Research.Naiad
             {
                 foreach (var v in stage.Value.Vertices)
                 {
-                    v.UpdateHoldsForFrontier(rollbackFrontiers[stage.Value.StageId.PairWith(v.VertexId)], 1L);
+                    v.UpdateHoldsForFrontier(rollbackFrontiers[stage.Value.StageId.PairWith(v.VertexId)], 1);
                 }
             }
 

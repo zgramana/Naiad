@@ -560,6 +560,7 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
 
         internal void SendInstantaneousFaultToleranceFrontier()
         {
+            Console.WriteLine("Sending instantaneous " + this.lastCheckpoint + " " + this.Vertex + " " + this.vertex.Stage.InternalComputation.Controller.HasFailed);
             if (!this.lastCheckpoint.Complete && !this.vertex.Stage.InternalComputation.Controller.HasFailed)
             {
                 this.SendUpdate(new FTFrontier(true), true);

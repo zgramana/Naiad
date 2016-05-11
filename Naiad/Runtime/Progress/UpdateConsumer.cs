@@ -269,6 +269,10 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
             NaiadTracing.Trace.LockHeld(this.PCS);
 
             var progressChanged = PCS.UpdatePointstampCount(time, update);
+            if (PCS.Frontier.Length == 0)
+            {
+                throw new ApplicationException("completed from update " + time + "." + update);
+            }
 
             Monitor.Exit(this.PCS);
             NaiadTracing.Trace.LockRelease(this.PCS);
@@ -291,6 +295,13 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
             // no elements means done.
             if (newFrontier.Length == 0)
             {
+                System.IO.StringWriter w = new System.IO.StringWriter();
+                foreach (var p in newFrontier)
+                {
+                    w.Write(p + " ");
+                }
+                Console.WriteLine("Getting empty frontier from updates " + w.ToString());
+                throw new ApplicationException("completed from update " + w.ToString());
                 //Tracing.Trace("Frontier advanced to <empty>");
                 NaiadTracing.Trace.RefAlignFrontier();
                 this.FrontierEmpty.Set();

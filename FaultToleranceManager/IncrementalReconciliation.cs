@@ -651,9 +651,9 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
             Collection<DiscardedMessage, T> discardedMessages,
             FTManager manager) where T : Time<T>
         {
-            // We only need the lowest send time along an edge for each destination time.
-            var prunedDiscarded = discardedMessages
-                .Min(m => PruneKey(m), m => m.srcTime.value);
+            //// We only need the lowest send time along an edge for each destination time.
+            //var prunedDiscarded = discardedMessages
+            //    .Min(m => PruneKey(m), m => m.srcTime.value);
 
             return frontiers
                 // only take the restoration frontiers
@@ -661,7 +661,7 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 // only take the lowest frontier at each stage
                 .Min(f => f.node.DenseStageId, f => f.frontier.value)
                 // match with all the discarded messages to the node for a given restoration frontier
-                .Join(prunedDiscarded, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
+                .Join(discardedMessages, f => f.node.DenseStageId, m => m.dstDenseStage, (f, m) => f.PairWith(m))
                 // keep all discarded messages that are outside the restoration frontier at the node
                 .Where(p => !p.First.frontier.Contains(p.Second.dstTime))
                 // we only need the sender node id and the send time of the discarded message
@@ -722,8 +722,8 @@ namespace Microsoft.Research.Naiad.FaultToleranceManager
                 .Min(f => StageFrontierKey(f), f => f.Second.value);
 
             Collection<Pair<SV,LexStamp>,T> staleDeliveredMessages = deliveredMessageTimes
-                // make sure messages are unique
-                .Distinct()
+                //// make sure messages are unique
+                //.Distinct()
                 // match up delivered messages with the projected frontier along the delivery edge,
                 // keeping the dst node, dst time and projected frontier
                 .Join(

@@ -362,6 +362,11 @@ namespace FaultToleranceExamples
                     //Console.WriteLine(this.Stage.Name + " Receive1 " + message.time);
                     TOuter outer = timeSelector(message.time);
 
+                    if (!this.values.ContainsKey(outer))
+                    {
+                        Console.WriteLine("Got bad data for " + this.Stage + " " + message.time);
+                        return;
+                    }
                     Dictionary<TKey, List<TInput2>> currentValues = this.values[outer];
                     Pair<long, long> window = this.windows[outer];
 
@@ -1389,7 +1394,7 @@ namespace FaultToleranceExamples
 
             public Pair<IEnumerable<HTRecord>, IEnumerable<HTRecord>> NextBatch(long entryTicks)
             {
-                IEnumerable<HTRecord> inBatch, outBatch = new HTRecord[0];
+                IEnumerable<HTRecord> inBatch = new HTRecord[0], outBatch = new HTRecord[0];
 
                 if (batchesReturned == 0)
                 {
@@ -1399,19 +1404,20 @@ namespace FaultToleranceExamples
                     // make matching random number generators for adding and removing records
                     this.introduceRandom = new Random(randomSeed);
                     this.removeRandom = new Random(randomSeed);
+                    inBatch = this.MakeAllKeyBatch(thisProcessRandom, entryTicks, batchesReturned);
                 }
 
                 // the batch is being added, so save its time
                 this.batchTimes.Enqueue(entryTicks.PairWith(batchesReturned));
 
-                inBatch = this.MakeAllKeyBatch(this.introduceRandom, entryTicks, batchesReturned).Concat(this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks, batchesReturned)).ToArray();
+                inBatch = inBatch.Concat(this.MakeBatch(this.introduceRandom, Program.htBatchSize, entryTicks, batchesReturned)).ToArray();
 
                 if (this.batchesReturned >= Program.htInitialBatches)
                 {
                     // the batch is being removed, so look up the time that it was put in
                     var removal = this.batchTimes.Dequeue();
                     entryTicks = -removal.First;
-                    outBatch = this.MakeAllKeyBatch(this.removeRandom, entryTicks, removal.Second).Concat(this.MakeBatch(this.removeRandom, Program.htBatchSize, entryTicks, removal.Second)).ToArray();
+                    outBatch = this.MakeBatch(this.removeRandom, Program.htBatchSize, entryTicks, removal.Second).ToArray();
                 }
 
                 ++this.batchesReturned;
@@ -1884,9 +1890,10 @@ namespace FaultToleranceExamples
                         break;
 
                     case "-big":
-                        numberOfKeys = 10000;
-                        htBatchSize = 100;
-                        htInitialBatches = 1000;
+                        numberOfKeys = 1000;
+                        htBatchSize = 20;
+                        htInitialBatches = 50;
+                        ccBatchTime = 20 * 1000;
                         slowBatchTime = 60 * 1000;
                         ++i;
                         break;

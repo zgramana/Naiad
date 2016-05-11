@@ -42,6 +42,7 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
     internal interface ProgressTracker : Frontier
     {
         void BroadcastProgressUpdate(Pointstamp time, int update);
+        void MakeLocalHold(Pointstamp time, int update);
 
         LocalProgressInfo GetInfoForWorker(int workerId);
         ProgressUpdateAggregator Aggregator { get; }
@@ -69,6 +70,11 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
         public ProgressUpdateAggregator Aggregator { get { return this.aggregator; } }
 
         public void BroadcastProgressUpdate(Pointstamp time, int update)
+        {
+            this.consumer.InjectElement(time, update);
+        }
+
+        public void MakeLocalHold(Pointstamp time, int update)
         {
             this.consumer.InjectElement(time, update);
         }
@@ -174,6 +180,11 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
 
             if (this.centralizer != null)
                 this.centralizer.InjectElement(time, update);
+        }
+
+        public void MakeLocalHold(Pointstamp time, int update)
+        {
+            this.consumer.InjectElement(time, update);
         }
 
         public void ForceFlush()
