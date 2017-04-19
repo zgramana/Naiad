@@ -356,11 +356,25 @@ namespace Microsoft.Research.Naiad.Dataflow
                 }
             }
             int releaseEpoch = p.Timestamp.a + 1;
+            List<Pair<Message<S, T>, ReturnAddress>> buffer = null;
             if (this.buffered.ContainsKey(releaseEpoch))
             {
-                var b = this.buffered[releaseEpoch];
+                buffer = this.buffered[releaseEpoch];
                 this.buffered.Remove(releaseEpoch);
-                foreach (var payload in b)
+            }
+            if (this.buffered.Count == 0)
+            {
+                this.currentEpoch = -1;
+            }
+            else
+            {
+                this.currentEpoch = releaseEpoch;
+                p.Timestamp.a = releaseEpoch;
+                this.MakeNonSelectiveNotification(p);
+            }
+            if (buffer != null)
+            {
+                foreach (var payload in buffer)
                 {
                     var message = payload.First;
                     var from = payload.Second;
@@ -374,15 +388,6 @@ namespace Microsoft.Research.Naiad.Dataflow
                         throw new ApplicationException("Time stack mismatch");
                     }
                 }
-            }
-            if (this.buffered.Count == 0)
-            {
-                this.currentEpoch = -1;
-            }
-            else
-            {
-                ++p.Timestamp.a;
-                this.MakeNonSelectiveNotification(p);
             }
         }
 

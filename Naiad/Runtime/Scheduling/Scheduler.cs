@@ -751,13 +751,16 @@ namespace Microsoft.Research.Naiad.Scheduling
                 // determine which item to run
                 for (int i = 0; i < workItems.Count; i++)
                 {
+
                     if (workItems[i].Capability.Timestamp.a < 0)
                     {
                         itemToRun = i;
                         break;
                     }
 
-                    if (itemToRun == workItems.Count || computation.Reachability.CompareTo(workItems[itemToRun].Capability, workItems[i].Capability) > 0)
+                    if (itemToRun == workItems.Count ||
+                        computation.Reachability.CompareTo(workItems[itemToRun].Capability, workItems[i].Capability) > 0 ||
+                        (workItems[itemToRun].Capability.Equals(workItems[i].Capability) && workItems[itemToRun].IsFake && !workItems[i].IsFake))
                     {
                         var valid = false;
 
