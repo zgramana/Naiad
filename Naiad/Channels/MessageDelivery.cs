@@ -1033,7 +1033,7 @@ namespace Microsoft.Research.Naiad.Dataflow.Channels
                 {
                     var serializedMessagePair = queue.Dequeue();
 
-                    this.endpoint.SerializedMessageReceived(serializedMessagePair.Second, serializedMessagePair.First, progressBuffer);
+                    this.endpoint.SerializedMessageReceived(serializedMessagePair.Second, serializedMessagePair.First);
 
                     Pair<T, int> delta = this.decoder.Time(serializedMessagePair.Second);
                     progressBuffer.Update(delta.First, -delta.Second);
@@ -1054,7 +1054,7 @@ namespace Microsoft.Research.Naiad.Dataflow.Channels
                 {
                     var messagePair = queue.Dequeue();
 
-                    this.endpoint.OnReceive(messagePair.Second, messagePair.First, this.progressBuffer);
+                    this.endpoint.OnReceive(messagePair.Second, messagePair.First);
                     this.progressBuffer.Update(messagePair.Second.time, -messagePair.Second.length);
 
                     messagePair.Second.Release(AllocationReason.PostOfficeChannel, this.bufferPool);

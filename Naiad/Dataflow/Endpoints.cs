@@ -103,7 +103,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// </summary>
         /// <param name="message">the message</param>
         /// <param name="from">the source of the message</param>
-        void OnReceive(Message<TRecord, TTime> message, ReturnAddress from, ProgressUpdateBuffer<TTime> progressBuffer);
+        void OnReceive(Message<TRecord, TTime> message, ReturnAddress from);
 
         /// <summary>
         /// Callback for a serialized message. 
@@ -111,7 +111,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// <param name="message">the serialized message</param>
         /// <param name="from">the sender of the message</param>
         /// 
-        void SerializedMessageReceived(SerializedMessage message, ReturnAddress from, ProgressUpdateBuffer<TTime> progressBuffer);
+        void SerializedMessageReceived(SerializedMessage message, ReturnAddress from);
     }
 
     #region StageInput and friends
@@ -250,7 +250,7 @@ namespace Microsoft.Research.Naiad.Dataflow
 
 #endif
 
-    public abstract class Receiver<S, T> : VertexInput<S, T>
+    internal abstract class Receiver<S, T> : VertexInput<S, T>
         where T : Time<T>
     {
         private int channelId;
@@ -289,15 +289,15 @@ namespace Microsoft.Research.Naiad.Dataflow
 
         public void ReplayReceive(Message<S, T> message, ReturnAddress from)
         {
-            this.OnReceive(message, from, null);
+            this.OnReceive(message, from);
             message.Release(AllocationReason.PostOfficeChannel, this.BufferPool);
         }
 
-        public abstract void OnReceive(Message<S, T> message, ReturnAddress from, ProgressUpdateBuffer<T> progressBuffer);
+        public abstract void OnReceive(Message<S, T> message, ReturnAddress from);
 
         private AutoSerializedMessageDecoder<S, T> decoder = null;
 
-        public void SerializedMessageReceived(SerializedMessage serializedMessage, ReturnAddress from, ProgressUpdateBuffer<T> progressBuffer)
+        public void SerializedMessageReceived(SerializedMessage serializedMessage, ReturnAddress from)
         {
             System.Diagnostics.Debug.Assert(this.AvailableEntrancy >= -1);
             if (this.decoder == null) this.decoder = new AutoSerializedMessageDecoder<S, T>(this.Vertex.SerializationFormat, this.Vertex.Scheduler.GetBufferPool<S>());
@@ -312,7 +312,7 @@ namespace Microsoft.Research.Naiad.Dataflow
             //      be queued, because its payload will be overwritten by the next batch of messages.
             foreach (Message<S, T> message in this.decoder.AsTypedMessages(serializedMessage, msg))
             {
-                this.OnReceive(message, from, progressBuffer);
+                this.OnReceive(message, from);
             }
             msg.Release(AllocationReason.Deserializer, this.BufferPool);
         }
@@ -329,7 +329,7 @@ namespace Microsoft.Research.Naiad.Dataflow
     {
         private readonly Action<Message<S, T>, ReturnAddress> MessageCallback;
         private readonly bool nonSelective = true;
-        private Dictionary<int, List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>> buffered = new Dictionary<int, List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>>();
+        private Dictionary<int, List<Pair<Message<S, T>, ReturnAddress>>> buffered = new Dictionary<int, List<Pair<Message<S, T>, ReturnAddress>>>();
         private int currentEpoch = -1;
 
         private void MakeNonSelectiveNotification(Pointstamp p)
@@ -337,10 +337,10 @@ namespace Microsoft.Research.Naiad.Dataflow
             T notifyTime = default(T);
             notifyTime.InitializeFrom(p, p.Timestamp.Length);
             // We can use a dummy time for the event time.
-            this.vertex.PushEventTime(notifyTime);
+            this.vertex.PushEventTime(default(T));
             this.vertex.NotifyAt(notifyTime, notifyTime, true);
             T poppedTime = this.vertex.PopEventTime();
-            if (poppedTime.CompareTo(notifyTime) != 0)
+            if (poppedTime.CompareTo(default(T)) != 0)
             {
                 throw new ApplicationException("Time stack mismatch");
             }
@@ -351,11 +351,10 @@ namespace Microsoft.Research.Naiad.Dataflow
             Pointstamp p = t.ToPointstamp(this.vertex.Stage.StageId);
             for (int i=1; i<p.Timestamp.Length; ++i)
             {
-                if (p.Timestamp[i] != Int32.MaxValue - 2) {
+                if (p.Timestamp[i] != Int32.MaxValue - 1) {
                     throw new ApplicationException("Unexpected notify " + p.ToString());
                 }
             }
-            Console.WriteLine("epoch end " + p.ToString());
             int releaseEpoch = p.Timestamp.a + 1;
             if (this.buffered.ContainsKey(releaseEpoch))
             {
@@ -363,19 +362,17 @@ namespace Microsoft.Research.Naiad.Dataflow
                 this.buffered.Remove(releaseEpoch);
                 foreach (var payload in b)
                 {
-                    var message = payload.First.First;
-                    var from = payload.First.Second;
-                    var buffer = payload.Second;
-                    Console.WriteLine("releasing time " + p.Location + ":" + message.time.ToString());
+                    var message = payload.First;
+                    var from = payload.Second;
                     this.vertex.PushEventTime(message.time);
+                    if (this.LoggingEnabled)
+                        this.logger.LogMessage(message, from);
                     this.MessageCallback(message, from);
                     T poppedTime = this.vertex.PopEventTime();
                     if (poppedTime.CompareTo(message.time) != 0)
                     {
                         throw new ApplicationException("Time stack mismatch");
                     }
-                    buffer.Update(message.time, -1);
-                    buffer.Flush();
                 }
             }
             if (this.buffered.Count == 0)
@@ -389,7 +386,7 @@ namespace Microsoft.Research.Naiad.Dataflow
             }
         }
 
-        public override void OnReceive(Message<S, T> message, ReturnAddress from, ProgressUpdateBuffer<T> progressBuffer)
+        public override void OnReceive(Message<S, T> message, ReturnAddress from)
         {
             if (this.nonSelective)
             {
@@ -403,7 +400,7 @@ namespace Microsoft.Research.Naiad.Dataflow
                     this.currentEpoch = p.Timestamp.a;
                     for (int i = 1; i < p.Timestamp.Length; ++i)
                     {
-                        p.Timestamp[i] = Int32.MaxValue - 2;
+                        p.Timestamp[i] = Int32.MaxValue - 1;
                     }
                     this.MakeNonSelectiveNotification(p);
                 }
@@ -411,14 +408,9 @@ namespace Microsoft.Research.Naiad.Dataflow
                 {
                     if (!buffered.ContainsKey(p.Timestamp.a))
                     {
-                        buffered[p.Timestamp.a] = new List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>();
+                        buffered[p.Timestamp.a] = new List<Pair<Message<S, T>, ReturnAddress>>();
                     }
-                    Console.WriteLine("buffering time " + p.ToString() + " current epoch " + this.currentEpoch);
-                    buffered[p.Timestamp.a].Add(message.PairWith(from).PairWith(progressBuffer));
-                    progressBuffer.Update(message.time, 1);
-                    progressBuffer.Flush();
-                    if (this.LoggingEnabled)
-                        this.logger.LogMessage(message, from);
+                    buffered[p.Timestamp.a].Add(message.PairWith(from));
                     return;
                 }
                 else

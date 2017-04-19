@@ -32,7 +32,7 @@ using Microsoft.Research.Naiad.Diagnostics;
 
 namespace Microsoft.Research.Naiad.Runtime.Progress
 {
-    public class ProgressUpdateProducer
+    internal class ProgressUpdateProducer
     {
         internal readonly PointstampCountSet LocalPCS;
         private readonly ProgressUpdateAggregator Aggregator;

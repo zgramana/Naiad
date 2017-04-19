@@ -396,6 +396,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// </summary>
         /// <param name="requirement">The requirement time.</param>
         /// <param name="capability">The capability time.</param>
+        /// <param name="isFake">The notification is fake for non-selective checkpoint simulation.</param>
         public void NotifyAt(TTime requirement, TTime capability, bool isFake = false)
         {
             if (!requirement.LessThan(capability))
@@ -546,7 +547,7 @@ namespace Microsoft.Research.Naiad.Dataflow
             Pointstamp fakePointStamp = default(TTime).ToPointstamp(-1);
             fakePointStamp.Timestamp[0] = (int)mode;
             TTime fakeTime = default(TTime).InitializeFrom(fakePointStamp, fakePointStamp.Timestamp.Length);
-            return this.Scheduler.EnqueueNotify(this, fakeTime, fakeTime, fakeTime, false, false, false);
+            return this.Scheduler.EnqueueNotify(this, fakeTime, fakeTime, fakeTime, false, false);
         }
 
         internal override void SetRollbackFrontier()
@@ -631,7 +632,7 @@ namespace Microsoft.Research.Naiad.Dataflow
 
                 var time = default(TTime).InitializeFrom(pointstamp, pointstamp.Timestamp.Length);
 
-                this.Scheduler.EnqueueNotify(this, time, time, time, true, false, false);    // could be set to true if we are sure this executes under the worker
+                this.Scheduler.EnqueueNotify(this, time, time, time, true, false);    // could be set to true if we are sure this executes under the worker
             }
         }
 

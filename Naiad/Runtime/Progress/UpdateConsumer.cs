@@ -248,8 +248,8 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
             // none of these are implemented, or ever used.
             public void Flush() { throw new NotImplementedException(); }
             //public void RecordReceived(Pair<Int64, Pointstamp> record, RemotePostbox sender) { throw new NotImplementedException(); }
-            public void OnReceive(Message<Update, Empty> message, ReturnAddress sender, ProgressUpdateBuffer<Empty> buffer) { throw new NotImplementedException(); }
-            public void SerializedMessageReceived(SerializedMessage message, ReturnAddress from, ProgressUpdateBuffer<Empty> buffer) { throw new NotImplementedException(); }
+            public void OnReceive(Message<Update, Empty> message, ReturnAddress sender) { throw new NotImplementedException(); }
+            public void SerializedMessageReceived(SerializedMessage message, ReturnAddress from) { throw new NotImplementedException(); }
             public void SetCheckpointer(Checkpointer<Empty> checkpointer) { throw new NotImplementedException(); }
             public bool LoggingEnabled { get { return false; } }
             public int SenderStageId { get; set; }
@@ -443,8 +443,8 @@ namespace Microsoft.Research.Naiad.Runtime.Progress
 
             // none of these are implemented, or ever called.
             public void Flush() { throw new NotImplementedException(); }
-            public void OnReceive(Message<Update, Empty> message, ReturnAddress sender, ProgressUpdateBuffer<Empty> buffer) { throw new NotImplementedException(); }
-            public void SerializedMessageReceived(SerializedMessage message, ReturnAddress from, ProgressUpdateBuffer<Empty> buffer) { throw new NotImplementedException(); }
+            public void OnReceive(Message<Update, Empty> message, ReturnAddress sender) { throw new NotImplementedException(); }
+            public void SerializedMessageReceived(SerializedMessage message, ReturnAddress from) { throw new NotImplementedException(); }
             public void SetCheckpointer(Checkpointer<Empty> checkpointer) { throw new NotImplementedException(); }
             public bool LoggingEnabled { get { return false; } }
             public int SenderStageId { get; set; }

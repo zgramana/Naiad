@@ -335,13 +335,13 @@ namespace Microsoft.Research.Naiad.Scheduling
             }
         }
 
-        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T time, bool shouldRestoreProgress, bool local, bool isFake)
+        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T time, bool shouldRestoreProgress, bool local, bool isFake = false)
             where T : Time<T>
         {
             return EnqueueNotify(op, enqueueTime, time, time, shouldRestoreProgress, local, isFake);
         }
 
-        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T requirement, T capability, bool shouldRestoreProgress, bool local, bool isFake)
+        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T requirement, T capability, bool shouldRestoreProgress, bool local, bool isFake = false)
             where T : Time<T>
         {
             var enq = enqueueTime.ToPointstamp(op.Stage.StageId);

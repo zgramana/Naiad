@@ -27,7 +27,7 @@ using Microsoft.Research.Naiad.Dataflow;
 
 namespace Microsoft.Research.Naiad.Runtime.Progress
 {
-    public class ProgressUpdateBuffer<T>
+    internal class ProgressUpdateBuffer<T>
         where T : Time<T>
     {
         public Dictionary<T, Int64> Updates;

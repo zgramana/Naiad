@@ -91,7 +91,7 @@ namespace Microsoft.Research.Naiad.Dataflow.Channels
                     throw new ApplicationException("Logged message sent to wrong receiver");
                 }
 
-                this.receiver.OnReceive(records, this.senderAddress, this.progressBuffer);
+                this.receiver.OnReceive(records, this.senderAddress);
 
                 this.progressBuffer.Update(records.time, -records.length);
                 this.progressBuffer.Flush();
@@ -133,7 +133,7 @@ namespace Microsoft.Research.Naiad.Dataflow.Channels
                 }
                 else
                 {
-                    this.receiver.OnReceive(records, this.senderAddress, this.progressBuffer);
+                    this.receiver.OnReceive(records, this.senderAddress);
                 }
             }
 

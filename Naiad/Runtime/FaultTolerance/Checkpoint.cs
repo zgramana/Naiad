@@ -705,6 +705,18 @@ namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
 
         private void Persist(FTFrontier upTo)
         {
+            if (!upTo.Complete)
+            {
+                Pointstamp dummy = new Pointstamp();
+                var p = upTo.ToPointstamps(dummy)[0];
+                for (int i = 1; i < p.Timestamp.Length; ++i)
+                {
+                    if (p.Timestamp[i] > 1023 && p.Timestamp[i] < Int32.MaxValue-2)
+                    {
+                        throw new ApplicationException("what");
+                    }
+                }
+            }
             var stopwatch = this.vertex.scheduler.Controller.Stopwatch;
             SerializationFormat serializationFormat = this.vertex.SerializationFormat;
             NaiadSerialization<int> intSerializer = serializationFormat.GetSerializer<int>();
