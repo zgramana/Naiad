@@ -329,17 +329,18 @@ namespace Microsoft.Research.Naiad.Dataflow
     {
         private readonly Action<Message<S, T>, ReturnAddress> MessageCallback;
         private readonly bool nonSelective = true;
-        private List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>[] buffered = new List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>[1024];
+        private Dictionary<int, List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>> buffered = new Dictionary<int, List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>>();
         private int currentEpoch = -1;
 
-        private void MakeNonSelectiveNotification(T time, Pointstamp p)
+        private void MakeNonSelectiveNotification(Pointstamp p)
         {
             T notifyTime = default(T);
             notifyTime.InitializeFrom(p, p.Timestamp.Length);
-            this.vertex.PushEventTime(time);
+            // We can use a dummy time for the event time.
+            this.vertex.PushEventTime(notifyTime);
             this.vertex.NotifyAt(notifyTime, notifyTime, true);
             T poppedTime = this.vertex.PopEventTime();
-            if (poppedTime.CompareTo(time) != 0)
+            if (poppedTime.CompareTo(notifyTime) != 0)
             {
                 throw new ApplicationException("Time stack mismatch");
             }
@@ -351,31 +352,40 @@ namespace Microsoft.Research.Naiad.Dataflow
             for (int i=1; i<p.Timestamp.Length; ++i)
             {
                 if (p.Timestamp[i] != Int32.MaxValue - 2) {
-                    return;
+                    throw new ApplicationException("Unexpected notify " + p.ToString());
                 }
             }
             Console.WriteLine("epoch end " + p.ToString());
-            this.currentEpoch = p.Timestamp.a + 1;
-            if (this.buffered[this.currentEpoch] != null)
+            int releaseEpoch = p.Timestamp.a + 1;
+            if (this.buffered.ContainsKey(releaseEpoch))
             {
-                var b = this.buffered[this.currentEpoch];
-                this.buffered[this.currentEpoch] = null;
+                var b = this.buffered[releaseEpoch];
+                this.buffered.Remove(releaseEpoch);
                 foreach (var payload in b)
                 {
                     var message = payload.First.First;
                     var from = payload.First.Second;
                     var buffer = payload.Second;
                     Console.WriteLine("releasing time " + p.Location + ":" + message.time.ToString());
-                    this.vertex.PushEventTime(t);
+                    this.vertex.PushEventTime(message.time);
                     this.MessageCallback(message, from);
                     T poppedTime = this.vertex.PopEventTime();
-                    if (poppedTime.CompareTo(t) != 0)
+                    if (poppedTime.CompareTo(message.time) != 0)
                     {
                         throw new ApplicationException("Time stack mismatch");
                     }
                     buffer.Update(message.time, -1);
                     buffer.Flush();
                 }
+            }
+            if (this.buffered.Count == 0)
+            {
+                this.currentEpoch = -1;
+            }
+            else
+            {
+                ++p.Timestamp.a;
+                this.MakeNonSelectiveNotification(p);
             }
         }
 
@@ -386,37 +396,37 @@ namespace Microsoft.Research.Naiad.Dataflow
                 Pointstamp p = message.time.ToPointstamp(this.vertex.Stage.StageId);
                 if (this.currentEpoch == -1)
                 {
-                    System.Diagnostics.Debug.Assert(p.Timestamp.a == 0);
+                    if (this.buffered.Count > 0)
+                    {
+                        throw new ApplicationException("Buffered entries");
+                    }
                     this.currentEpoch = p.Timestamp.a;
                     for (int i = 1; i < p.Timestamp.Length; ++i)
                     {
                         p.Timestamp[i] = Int32.MaxValue - 2;
                     }
-                    this.MakeNonSelectiveNotification(message.time, p);
+                    this.MakeNonSelectiveNotification(p);
                 }
                 else if (this.currentEpoch < p.Timestamp.a)
                 {
-                    System.Diagnostics.Debug.Assert(p.Timestamp.a > 0);
-                    if (buffered[p.Timestamp.a] == null)
+                    if (!buffered.ContainsKey(p.Timestamp.a))
                     {
                         buffered[p.Timestamp.a] = new List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>();
-                        Pointstamp np = p;
-                        --np.Timestamp.a;
-                        for (int i = 1; i < np.Timestamp.Length; ++i)
-                        {
-                            np.Timestamp[i] = Int32.MaxValue - 2;
-                        }
-                        this.MakeNonSelectiveNotification(message.time, np);
                     }
                     Console.WriteLine("buffering time " + p.ToString() + " current epoch " + this.currentEpoch);
                     buffered[p.Timestamp.a].Add(message.PairWith(from).PairWith(progressBuffer));
                     progressBuffer.Update(message.time, 1);
                     progressBuffer.Flush();
+                    if (this.LoggingEnabled)
+                        this.logger.LogMessage(message, from);
                     return;
                 }
                 else
                 {
-                    System.Diagnostics.Debug.Assert(this.currentEpoch == p.Timestamp[0]);
+                    if (this.currentEpoch != p.Timestamp[0])
+                    {
+                        throw new ApplicationException("Out of order");
+                    }
                 }
             }
             this.vertex.PushEventTime(message.time);
