@@ -267,6 +267,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         internal Checkpointer<TTime> Checkpointer;
         internal INotificationLogger<TTime> notificationLogger;
         internal readonly Stage<TTime> TypedStage;
+        internal List<Action<TTime>> notificationCallbacks = new List<Action<TTime>>();
 
         /// <summary>
         /// The stage to which this vertex belongs.
@@ -393,7 +394,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// </summary>
         /// <param name="requirement">The requirement time.</param>
         /// <param name="capability">The capability time.</param>
-        public void NotifyAt(TTime requirement, TTime capability)
+        public void NotifyAt(TTime requirement, TTime capability, bool isFake = false)
         {
             if (!requirement.LessThan(capability))
                 Console.Error.WriteLine("Requesting a notification with a requirement not less than the capability");
@@ -424,7 +425,7 @@ namespace Microsoft.Research.Naiad.Dataflow
                     progressBuffer.Flush();
 
                     // inform the scheduler
-                    this.Scheduler.EnqueueNotify(this, this.CurrentEventTime, requirement, capability, true, true);
+                    this.Scheduler.EnqueueNotify(this, this.CurrentEventTime, requirement, capability, true, true, isFake);
                 }
             }
         }
@@ -479,7 +480,7 @@ namespace Microsoft.Research.Naiad.Dataflow
                         this.notificationLogger.LogNotification(time);
                     }
 
-                    this.OnNotify(time);
+                    if (!workItem.IsFake) this.OnNotify(time);
 
                     // if the notification didn't request another notification for the same time, then the time is complete and we
                     // may want to checkpoint
@@ -492,6 +493,14 @@ namespace Microsoft.Research.Naiad.Dataflow
                     if (poppedTime.CompareTo(time) != 0)
                     {
                         throw new ApplicationException("Time stack mismatch");
+                    }
+
+                    if (workItem.IsFake)
+                    {
+                        foreach (var c in this.notificationCallbacks)
+                        {
+                            c.Invoke(time);
+                        }
                     }
 
                     this.Entrancy = this.Entrancy + 1;
@@ -512,7 +521,7 @@ namespace Microsoft.Research.Naiad.Dataflow
             Pointstamp fakePointStamp = default(TTime).ToPointstamp(-1);
             fakePointStamp.Timestamp[0] = (int)mode;
             TTime fakeTime = default(TTime).InitializeFrom(fakePointStamp, fakePointStamp.Timestamp.Length);
-            return this.Scheduler.EnqueueNotify(this, fakeTime, fakeTime, fakeTime, false, false);
+            return this.Scheduler.EnqueueNotify(this, fakeTime, fakeTime, fakeTime, false, false, false);
         }
 
         internal override void SetRollbackFrontier()
@@ -597,7 +606,7 @@ namespace Microsoft.Research.Naiad.Dataflow
 
                 var time = default(TTime).InitializeFrom(pointstamp, pointstamp.Timestamp.Length);
 
-                this.Scheduler.EnqueueNotify(this, time, time, time, true, false);    // could be set to true if we are sure this executes under the worker
+                this.Scheduler.EnqueueNotify(this, time, time, time, true, false, false);    // could be set to true if we are sure this executes under the worker
             }
         }
 

@@ -30,7 +30,7 @@ using Microsoft.Research.Naiad.Serialization;
 
 namespace Microsoft.Research.Naiad.Runtime.FaultTolerance
 {
-    internal interface IMessageLogger<S, T> where T : Time<T>
+    public interface IMessageLogger<S, T> where T : Time<T>
     {
         void LogMessage(Message<S, T> message, ReturnAddress from);
     }

@@ -2035,7 +2035,7 @@ namespace FaultToleranceExamples
                     IEnumerable<int> failFast = Enumerable.Range(fpBase, fpRange)
                         .Except(failSlow.Concat(failMedium));
 
-                    while (true)
+                    while (false)
                     {
                         Random random = new Random();
                         //System.Threading.Thread.Sleep(Timeout.Infinite);

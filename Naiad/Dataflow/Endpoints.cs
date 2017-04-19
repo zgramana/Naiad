@@ -103,7 +103,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// </summary>
         /// <param name="message">the message</param>
         /// <param name="from">the source of the message</param>
-        void OnReceive(Message<TRecord, TTime> message, ReturnAddress from);
+        void OnReceive(Message<TRecord, TTime> message, ReturnAddress from, ProgressUpdateBuffer<TTime> progressBuffer);
 
         /// <summary>
         /// Callback for a serialized message. 
@@ -111,7 +111,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         /// <param name="message">the serialized message</param>
         /// <param name="from">the sender of the message</param>
         /// 
-        void SerializedMessageReceived(SerializedMessage message, ReturnAddress from);
+        void SerializedMessageReceived(SerializedMessage message, ReturnAddress from, ProgressUpdateBuffer<TTime> progressBuffer);
     }
 
     #region StageInput and friends
@@ -250,7 +250,7 @@ namespace Microsoft.Research.Naiad.Dataflow
 
 #endif
 
-    internal abstract class Receiver<S, T> : VertexInput<S, T>
+    public abstract class Receiver<S, T> : VertexInput<S, T>
         where T : Time<T>
     {
         private int channelId;
@@ -289,15 +289,15 @@ namespace Microsoft.Research.Naiad.Dataflow
 
         public void ReplayReceive(Message<S, T> message, ReturnAddress from)
         {
-            this.OnReceive(message, from);
+            this.OnReceive(message, from, null);
             message.Release(AllocationReason.PostOfficeChannel, this.BufferPool);
         }
 
-        public abstract void OnReceive(Message<S, T> message, ReturnAddress from);
+        public abstract void OnReceive(Message<S, T> message, ReturnAddress from, ProgressUpdateBuffer<T> progressBuffer);
 
         private AutoSerializedMessageDecoder<S, T> decoder = null;
 
-        public void SerializedMessageReceived(SerializedMessage serializedMessage, ReturnAddress from)
+        public void SerializedMessageReceived(SerializedMessage serializedMessage, ReturnAddress from, ProgressUpdateBuffer<T> progressBuffer)
         {
             System.Diagnostics.Debug.Assert(this.AvailableEntrancy >= -1);
             if (this.decoder == null) this.decoder = new AutoSerializedMessageDecoder<S, T>(this.Vertex.SerializationFormat, this.Vertex.Scheduler.GetBufferPool<S>());
@@ -312,7 +312,7 @@ namespace Microsoft.Research.Naiad.Dataflow
             //      be queued, because its payload will be overwritten by the next batch of messages.
             foreach (Message<S, T> message in this.decoder.AsTypedMessages(serializedMessage, msg))
             {
-                this.OnReceive(message, from);
+                this.OnReceive(message, from, progressBuffer);
             }
             msg.Release(AllocationReason.Deserializer, this.BufferPool);
         }
@@ -328,9 +328,97 @@ namespace Microsoft.Research.Naiad.Dataflow
         where T : Time<T>
     {
         private readonly Action<Message<S, T>, ReturnAddress> MessageCallback;
+        private readonly bool nonSelective = true;
+        private List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>[] buffered = new List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>[1024];
+        private int currentEpoch = -1;
 
-        public override void OnReceive(Message<S, T> message, ReturnAddress from)
+        private void MakeNonSelectiveNotification(T time, Pointstamp p)
         {
+            T notifyTime = default(T);
+            notifyTime.InitializeFrom(p, p.Timestamp.Length);
+            this.vertex.PushEventTime(time);
+            this.vertex.NotifyAt(notifyTime, notifyTime, true);
+            T poppedTime = this.vertex.PopEventTime();
+            if (poppedTime.CompareTo(time) != 0)
+            {
+                throw new ApplicationException("Time stack mismatch");
+            }
+        }
+
+        private void NotifyCallback(T t)
+        {
+            Pointstamp p = t.ToPointstamp(this.vertex.Stage.StageId);
+            for (int i=1; i<p.Timestamp.Length; ++i)
+            {
+                if (p.Timestamp[i] != Int32.MaxValue - 2) {
+                    return;
+                }
+            }
+            Console.WriteLine("epoch end " + p.ToString());
+            this.currentEpoch = p.Timestamp.a + 1;
+            if (this.buffered[this.currentEpoch] != null)
+            {
+                var b = this.buffered[this.currentEpoch];
+                this.buffered[this.currentEpoch] = null;
+                foreach (var payload in b)
+                {
+                    var message = payload.First.First;
+                    var from = payload.First.Second;
+                    var buffer = payload.Second;
+                    Console.WriteLine("releasing time " + p.Location + ":" + message.time.ToString());
+                    this.vertex.PushEventTime(t);
+                    this.MessageCallback(message, from);
+                    T poppedTime = this.vertex.PopEventTime();
+                    if (poppedTime.CompareTo(t) != 0)
+                    {
+                        throw new ApplicationException("Time stack mismatch");
+                    }
+                    buffer.Update(message.time, -1);
+                    buffer.Flush();
+                }
+            }
+        }
+
+        public override void OnReceive(Message<S, T> message, ReturnAddress from, ProgressUpdateBuffer<T> progressBuffer)
+        {
+            if (this.nonSelective)
+            {
+                Pointstamp p = message.time.ToPointstamp(this.vertex.Stage.StageId);
+                if (this.currentEpoch == -1)
+                {
+                    System.Diagnostics.Debug.Assert(p.Timestamp.a == 0);
+                    this.currentEpoch = p.Timestamp.a;
+                    for (int i = 1; i < p.Timestamp.Length; ++i)
+                    {
+                        p.Timestamp[i] = Int32.MaxValue - 2;
+                    }
+                    this.MakeNonSelectiveNotification(message.time, p);
+                }
+                else if (this.currentEpoch < p.Timestamp.a)
+                {
+                    System.Diagnostics.Debug.Assert(p.Timestamp.a > 0);
+                    if (buffered[p.Timestamp.a] == null)
+                    {
+                        buffered[p.Timestamp.a] = new List<Pair<Pair<Message<S, T>, ReturnAddress>, ProgressUpdateBuffer<T>>>();
+                        Pointstamp np = p;
+                        --np.Timestamp.a;
+                        for (int i = 1; i < np.Timestamp.Length; ++i)
+                        {
+                            np.Timestamp[i] = Int32.MaxValue - 2;
+                        }
+                        this.MakeNonSelectiveNotification(message.time, np);
+                    }
+                    Console.WriteLine("buffering time " + p.ToString() + " current epoch " + this.currentEpoch);
+                    buffered[p.Timestamp.a].Add(message.PairWith(from).PairWith(progressBuffer));
+                    progressBuffer.Update(message.time, 1);
+                    progressBuffer.Flush();
+                    return;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.Assert(this.currentEpoch == p.Timestamp[0]);
+                }
+            }
             this.vertex.PushEventTime(message.time);
 
             if (this.LoggingEnabled)
@@ -347,11 +435,19 @@ namespace Microsoft.Research.Naiad.Dataflow
         public ActionReceiver(Vertex<T> vertex, Action<Message<S, T>> messagecallback)
             : base(vertex)
         {
+            if (this.nonSelective)
+            {
+                vertex.notificationCallbacks.Add(this.NotifyCallback);
+            }
             this.MessageCallback = (m, u) => messagecallback(m);
         }
         public ActionReceiver(Vertex<T> vertex, Action<S, T> recordcallback)
             : base(vertex)
         {
+            if (this.nonSelective)
+            {
+                vertex.notificationCallbacks.Add(this.NotifyCallback);
+            }
             this.MessageCallback = ((m, u) => { for (int i = 0; i < m.length; i++) recordcallback(m.payload[i], m.time); });
         }
     }

@@ -153,6 +153,7 @@ namespace Microsoft.Research.Naiad.Scheduling
             public Pointstamp Requirement;  // should not be run until this time (scheduled at).
             public Pointstamp Capability;   // may produce records at this time (prioritize by).
             public bool ShouldRestoreProgress;
+            public bool IsFake;
             public Dataflow.Vertex Vertex;
 
             public void Run()
@@ -175,13 +176,14 @@ namespace Microsoft.Research.Naiad.Scheduling
                 return String.Format("{0}\t{1}", Requirement, Vertex);
             }
 
-            public WorkItem(Pointstamp enq, Pointstamp req, Pointstamp cap, bool shouldRestoreProgress, Dataflow.Vertex o)
+            public WorkItem(Pointstamp enq, Pointstamp req, Pointstamp cap, bool shouldRestoreProgress, Dataflow.Vertex o, bool f)
             {
                 EnqueueTime = enq;
                 Requirement = req;
                 Capability = cap;
                 ShouldRestoreProgress = shouldRestoreProgress;
                 Vertex = o;
+                IsFake = f;
             }
         }
 
@@ -333,20 +335,20 @@ namespace Microsoft.Research.Naiad.Scheduling
             }
         }
 
-        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T time, bool shouldRestoreProgress, bool local)
+        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T time, bool shouldRestoreProgress, bool local, bool isFake)
             where T : Time<T>
         {
-            return EnqueueNotify(op, enqueueTime, time, time, shouldRestoreProgress, local);
+            return EnqueueNotify(op, enqueueTime, time, time, shouldRestoreProgress, local, isFake);
         }
 
-        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T requirement, T capability, bool shouldRestoreProgress, bool local)
+        public int EnqueueNotify<T>(Dataflow.Vertex op, T enqueueTime, T requirement, T capability, bool shouldRestoreProgress, bool local, bool isFake)
             where T : Time<T>
         {
             var enq = enqueueTime.ToPointstamp(op.Stage.StageId);
             var req = requirement.ToPointstamp(op.Stage.StageId);
             var cap = capability.ToPointstamp(op.Stage.StageId);
 
-            return Enqueue(new WorkItem(enq, req, cap, shouldRestoreProgress, op), local);
+            return Enqueue(new WorkItem(enq, req, cap, shouldRestoreProgress, op, isFake), local);
         }
 
 

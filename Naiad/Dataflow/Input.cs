@@ -457,7 +457,7 @@ namespace Microsoft.Research.Naiad.Dataflow
                 Pointstamp fakePointStamp = default(T).ToPointstamp(-1);
                 fakePointStamp.Timestamp[0] = (int)mode;
                 T fakeTime = default(T).InitializeFrom(fakePointStamp, fakePointStamp.Timestamp.Length);
-                return this.Scheduler.EnqueueNotify(this, fakeTime, fakeTime, fakeTime, false, false);
+                return this.Scheduler.EnqueueNotify(this, fakeTime, fakeTime, fakeTime, false, false, false);
             }
         }
 
@@ -479,7 +479,7 @@ namespace Microsoft.Research.Naiad.Dataflow
                     {
                         this.inputLogger.LogInput(time, batch);
                     }
-                    scheduler.EnqueueNotify(this, this.currentVertexHold, this.currentVertexHold, false, false);
+                    scheduler.EnqueueNotify(this, this.currentVertexHold, this.currentVertexHold, false, false, false);
                 }
             }
         }
@@ -493,7 +493,7 @@ namespace Microsoft.Research.Naiad.Dataflow
                 {
                     this.inputLogger.LogInput(time, null);
                 }
-                scheduler.EnqueueNotify(this, this.currentVertexHold, this.currentVertexHold, false, false);
+                scheduler.EnqueueNotify(this, this.currentVertexHold, this.currentVertexHold, false, false, false);
             }
         }
 
@@ -502,7 +502,7 @@ namespace Microsoft.Research.Naiad.Dataflow
             lock (this)
             {
                 this.inputQueue.Enqueue(new Instruction<S, T>(time, batch));
-                scheduler.EnqueueNotify(this, this.currentVertexHold, this.currentVertexHold, false, false);
+                scheduler.EnqueueNotify(this, this.currentVertexHold, this.currentVertexHold, false, false, false);
             }
         }
 
