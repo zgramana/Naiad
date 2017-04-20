@@ -266,7 +266,7 @@ namespace Microsoft.Research.Naiad.Dataflow
         }
         public bool LoggingEnabled { get { return this.logger != null; } }
 
-        private BufferPool<S> BufferPool;
+        protected BufferPool<S> BufferPool;
 
         public int AvailableEntrancy
         {
@@ -387,6 +387,7 @@ namespace Microsoft.Research.Naiad.Dataflow
                     {
                         throw new ApplicationException("Time stack mismatch");
                     }
+                    message.Release(AllocationReason.PostOfficeChannel, this.BufferPool);
                 }
             }
         }
@@ -415,7 +416,11 @@ namespace Microsoft.Research.Naiad.Dataflow
                     {
                         buffered[p.Timestamp.a] = new List<Pair<Message<S, T>, ReturnAddress>>();
                     }
-                    buffered[p.Timestamp.a].Add(message.PairWith(from));
+                    var newMessage = new Message<S, T>(message.time);
+                    newMessage.Allocate(AllocationReason.PostOfficeChannel, this.BufferPool);
+                    Array.Copy(message.payload, newMessage.payload, message.length);
+                    newMessage.length = message.length;
+                    buffered[p.Timestamp.a].Add(newMessage.PairWith(from));
                     return;
                 }
                 else
