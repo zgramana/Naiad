@@ -1239,7 +1239,7 @@ namespace Microsoft.Research.Naiad.Serialization
                 List<CodeStatement> stringStmts = new List<CodeStatement>();
 
                 stringStmts.Add(Assign(toDeserialize,
-                    new CodeObjectCreateExpression(typeof(string), new CodeCastExpression(typeof(char*), currentPosition), Expr("0"), Var(lengthVar))));
+                    new CodeObjectCreateExpression(typeof(string), new CodeCastExpression("System.Char*", currentPosition), Expr("0"), Var(lengthVar))));
 
                 stringStmts.Add(Assign(currentPosition, new CodeBinaryOperatorExpression(currentPosition, CodeBinaryOperatorType.Add, BinOp(Var(lengthVar), CodeBinaryOperatorType.Multiply, Expr("sizeof(char)")))));
                 stringStmts.Add(Assign(bytesRemaining, new CodeBinaryOperatorExpression(bytesRemaining, CodeBinaryOperatorType.Subtract, BinOp(Var(lengthVar), CodeBinaryOperatorType.Multiply, Expr("sizeof(char)")))));
